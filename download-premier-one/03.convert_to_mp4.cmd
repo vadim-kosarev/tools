@@ -1,1 +1,2 @@
-ffmpeg -i target/result/__output.ts target/result/__output.mp4
+call .\00.env.cmd
+ffmpeg -i "target/result/%videoName%.ts" "target/result/%videoName%.mp4"
