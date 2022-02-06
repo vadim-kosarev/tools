@@ -1,5 +1,5 @@
-set urlBase=https://video-1-303.uma.media/hls-vod/tsfdf8yj_ZoSva_7ai5bgg/1644176480/51/0x5000c500b35a38d1/948701dc44e446179fadc35a78905987.mp4
-set maxSegment=600
+set urlBase=https://video-1-201.uma.media/hls-vod/p1Hntzr4nN3AJK2aGze3_w/1644184453/67/0x5000c500b35da91f/9f321ab742784ab08907ff2da5332240.mp4
+set maxSegment=250
 
 del target\_ls.txt
 mkdir target
