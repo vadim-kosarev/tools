@@ -1,5 +1,10 @@
-set suffix=plohie-pesni-67
+:: update the data below
+:: replace ^& with ^^&
 
-curl -H @headers.txt https://vkvd214.mycdn.me/?expires=1700433809434^&srcIp=31.173.86.154^&pr=40^&srcAg=CHROME^&ms=45.136.22.203^&type=1^&sig=Ga2vUO7XFLQ^&ct=22^&urls=45.136.21.150^&clientType=13^&appId=512000384397^&id=4289981909641^&bytes=0-527738962 --output a-video-%suffix%.webm
+set suffix=zvezdy-1
 
-curl -H @headers.txt https://vkvd214.mycdn.me/?expires=1700433809434^&srcIp=31.173.86.154^&pr=40^&srcAg=CHROME^&ms=45.136.22.203^&type=6^&sig=SxwmA8rwjz4^&ct=21^&urls=45.136.21.150^&clientType=13^&appId=512000384397^&id=4289981909641^&bytes=0-29594234 --output b-audio-%suffix%.webm
+:: Video
+curl -H @headers.txt https://vkvd117.mycdn.me/?expires=1710597512403^&srcIp=95.216.148.18^&pr=40^&srcAg=CHROME^&ms=185.226.53.161^&mid=7204095338736^&type=5^&subId=6381682821872^&sig=K0EGottM89U^&ct=32^&urls=45.136.22.176^&clientType=13^&appId=512000384397^&asubs=y^&id=6237076064812^&bytes=0-978873737 --output a-video-%suffix%.webm
+
+:: Audio
+curl -H @headers.txt https://vkvd117.mycdn.me/?expires=1710597512403^&srcIp=95.216.148.18^&pr=40^&srcAg=CHROME^&ms=185.226.53.161^&mid=7204095338736^&type=1^&subId=6381682821872^&sig=aKN4Dpo2bzs^&ct=22^&urls=45.136.22.176^&clientType=13^&appId=512000384397^&asubs=y^&id=6237076064812^&bytes=0-166210796 --output b-audio-%suffix%.webm

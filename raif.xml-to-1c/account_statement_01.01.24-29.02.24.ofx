@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?><?OFX OFXHEADER="200" VERSION="200" SECURITY="NONE"?>
+<OFX>
+	<SIGNONMSGSRSV1>
+		<SONRS>
+			<STATUS>
+				<CODE>0</CODE>
+				<SEVERITY>INFO</SEVERITY>
+			</STATUS>
+			<DTSERVER>20240311120000</DTSERVER>
+			<LANGUAGE>ENG</LANGUAGE>
+		</SONRS>
+	</SIGNONMSGSRSV1>
+	<BANKMSGSRSV1>
+		<STMTTRNRS>
+			<TRNUID>0</TRNUID>
+			<STATUS>
+				<CODE>0</CODE>
+				<SEVERITY>INFO</SEVERITY>
+			</STATUS>
+			<STMTRS>
+				<CURDEF>RUR</CURDEF>
+				<BANKACCTFROM>
+					<BANKID>RZBMRUMM</BANKID>
+					<ACCTID>40817810901102599839</ACCTID>
+					<ACCTTYPE>CHECKING</ACCTTYPE>
+				</BANKACCTFROM>
+				<BANKTRANLIST>
+					<DTSTART>20240211120000</DTSTART>
+					<DTEND>20240119120000</DTEND>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240211120000</DTPOSTED> <!-- ДАТА ОПЕРАЦИИ -->
+						<DTAVAIL>20240213120000</DTAVAIL> <!-- 	ДАТА ОБРАБОТКИ -->
+						<TRNAMT>-61.0000</TRNAMT>
+						   <FITID>466455887889</FITID>
+						<CHECKNUM>466455887889</CHECKNUM>
+						<NAME>Mos.Transport MOSKVA RUS</NAME>
+						<MEMO>Mos.Transport MOSKVA RUS</MEMO><!-- ОПИСАНИЕ -->
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>CREDIT</TRNTYPE>
+						<DTPOSTED>20240208120000</DTPOSTED>
+						<DTAVAIL>20240208120000</DTAVAIL>
+						<TRNAMT>71.8500</TRNAMT>
+						<FITID>466455887872</FITID>
+						<CHECKNUM>466455887872</CHECKNUM>
+						<NAME>Cashback 1,5%</NAME>
+						<MEMO>Cashback 1,5%</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>CREDIT</TRNTYPE>
+						<DTPOSTED>20240207120000</DTPOSTED>
+						<DTAVAIL>20240207120000</DTAVAIL>
+						<TRNAMT>56.0300</TRNAMT>
+						<FITID>466455887876</FITID>
+						<CHECKNUM>466455887876</CHECKNUM>
+						<NAME>FX EUR/RUR [86.2100] WEB</NAME>
+						<MEMO>FX EUR/RUR [86.2100] WEB</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240207120000</DTPOSTED>
+						<DTAVAIL>20240207120000</DTAVAIL>
+						<TRNAMT>-114769.8900</TRNAMT>
+						<FITID>466455887884</FITID>
+						<CHECKNUM>466455887884</CHECKNUM>
+						<NAME>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</NAME>
+						<MEMO>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>CREDIT</TRNTYPE>
+						<DTPOSTED>20240206120000</DTPOSTED>
+						<DTAVAIL>20240206120000</DTAVAIL>
+						<TRNAMT>413542.2000</TRNAMT>
+						<FITID>466456084494</FITID>
+						<CHECKNUM>466456084494</CHECKNUM>
+						<NAME>рублевый перевод,Вывод Д/С с брокерского счета по требованию Клиента № "10667351" от "6,номер счета отправителя-30601810210106351155</NAME>
+						<MEMO>рублевый перевод,Вывод Д/С с брокерского счета по требованию Клиента № "10667351" от "6,номер счета отправителя-30601810210106351155</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240206120000</DTPOSTED>
+						<DTAVAIL>20240206120000</DTAVAIL>
+						<TRNAMT>-300000.0000</TRNAMT>
+						<FITID>466455887885</FITID>
+						<CHECKNUM>466455887885</CHECKNUM>
+						<NAME>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</NAME>
+						<MEMO>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240122120000</DTPOSTED>
+						<DTAVAIL>20240122120000</DTAVAIL>
+						<TRNAMT>-50.0000</TRNAMT>
+						<FITID>466456084495</FITID>
+						<CHECKNUM>466456084495</CHECKNUM>
+						<NAME>Комиссия за исходящий платеж в рублях от 2024-01-20 (Raiffeisen Connect), расчетный документ №1, сумма 1000.00 рублей</NAME>
+						<MEMO>Комиссия за исходящий платеж в рублях от 2024-01-20 (Raiffeisen Connect), расчетный документ №1, сумма 1000.00 рублей</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240122120000</DTPOSTED>
+						<DTAVAIL>20240122120000</DTAVAIL>
+						<TRNAMT>-366.3600</TRNAMT>
+						<FITID>466456084496</FITID>
+						<CHECKNUM>466456084496</CHECKNUM>
+						<NAME>Оплата покупки 366.36 RUB Rostelecom. Осуществлен через СБП.</NAME>
+						<MEMO>Оплата покупки 366.36 RUB Rostelecom. Осуществлен через СБП.</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240122120000</DTPOSTED>
+						<DTAVAIL>20240122120000</DTAVAIL>
+						<TRNAMT>-1000.0000</TRNAMT>
+						<FITID>466456084497</FITID>
+						<CHECKNUM>466456084497</CHECKNUM>
+						<NAME>рублевый перевод,Входящий перевод по ИП Косарев В.А.,номер счета получателя-40802810170010440603</NAME>
+						<MEMO>рублевый перевод,Входящий перевод по ИП Косарев В.А.,номер счета получателя-40802810170010440603</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240120120000</DTPOSTED>
+						<DTAVAIL>20240120120000</DTAVAIL>
+						<TRNAMT>-1700.0000</TRNAMT>
+						<FITID>466456084484</FITID>
+						<CHECKNUM>466456084484</CHECKNUM>
+						<NAME>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</NAME>
+						<MEMO>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240120120000</DTPOSTED>
+						<DTAVAIL>20240122120000</DTAVAIL>
+						<TRNAMT>-33500.0000</TRNAMT>
+						<FITID>466456084483</FITID>
+						<CHECKNUM>466456084483</CHECKNUM>
+						<NAME>ATM 60029683 MOSKVA RUS</NAME>
+						<MEMO>ATM 60029683 MOSKVA RUS</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>CREDIT</TRNTYPE>
+						<DTPOSTED>20240119120000</DTPOSTED>
+						<DTAVAIL>20240119120000</DTAVAIL>
+						<TRNAMT>57647.6100</TRNAMT>
+						<FITID>466456084489</FITID>
+						<CHECKNUM>466456084489</CHECKNUM>
+						<NAME>FX EUR/RUR [89.3900] WEB</NAME>
+						<MEMO>FX EUR/RUR [89.3900] WEB</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>CREDIT</TRNTYPE>
+						<DTPOSTED>20240119120000</DTPOSTED>
+						<DTAVAIL>20240119120000</DTAVAIL>
+						<TRNAMT>14930.4100</TRNAMT>
+						<FITID>466456084486</FITID>
+						<CHECKNUM>466456084486</CHECKNUM>
+						<NAME>FX EUR/RUR [89.7800] WEB</NAME>
+						<MEMO>FX EUR/RUR [89.7800] WEB</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240119120000</DTPOSTED>
+						<DTAVAIL>20240122120000</DTAVAIL>
+						<TRNAMT>-4790.0000</TRNAMT>
+						<FITID>466456084480</FITID>
+						<CHECKNUM>466456084480</CHECKNUM>
+						<NAME>YM*polza SANKT-PETERBU RUS</NAME>
+						<MEMO>YM*polza SANKT-PETERBU RUS</MEMO>
+					</STMTTRN>
+					<STMTTRN>
+						<TRNTYPE>DEBIT</TRNTYPE>
+						<DTPOSTED>20240119120000</DTPOSTED>
+						<DTAVAIL>20240119120000</DTAVAIL>
+						<TRNAMT>-30000.0000</TRNAMT>
+						<FITID>466456084487</FITID>
+						<CHECKNUM>466456084487</CHECKNUM>
+						<NAME>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</NAME>
+						<MEMO>Перевод на номер 0079200192606. Получатель: Вадим Анатольевич К. Осуществлен через СБП.</MEMO>
+					</STMTTRN>
+				</BANKTRANLIST>
+				<LEDGERBAL>
+					<BALAMT>0.00</BALAMT>
+					<DTASOF>20240311120000</DTASOF>
+				</LEDGERBAL>
+			</STMTRS>
+		</STMTTRNRS>
+	</BANKMSGSRSV1>
+</OFX>
