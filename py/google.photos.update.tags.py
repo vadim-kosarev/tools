@@ -47,7 +47,7 @@ def processFile(theFilePath):
                         theFilePath
                     ], shell=True)
                     print(cmd1)
-                    print(f'{out}')
+                    print(out.decode("utf-8"))
                 except subprocess.CalledProcessError as err:
                     print(f'Process Error: {err}')
     print("------------------------------")
