@@ -19,10 +19,10 @@ def processFile(theFilePath):
     print(f'file: `{theFilePath}`')
     print(f'json: `{jsonFilePath}`')
 
-    imgJson = subprocess.check_output(["cmd", "/C", "exiftool", "-j", theFilePath])
-    imgJsonData = json.loads(imgJson)
-    print(f'imgData: {imgJsonData}')
-    print("+++ " + jsonpath.jsonpath(imgJsonData, "$.*.FileModifyDate")[0])
+#    imgJson = subprocess.check_output(["cmd", "/C", "exiftool", "-j", theFilePath])
+#    imgJsonData = json.loads(imgJson)
+#    print(f'imgData: {imgJsonData}')
+#    print("+++ " + jsonpath.jsonpath(imgJsonData, "$.*.FileModifyDate")[0])
 
     if (os.path.isfile(jsonFilePath)):
         with open(jsonFilePath) as f:
