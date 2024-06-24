@@ -31,6 +31,9 @@ def processFile(theFilePath):
 
             print("===")
             ts = jsonpath.jsonpath(extJsonData, "$..creationTime.timestamp")[0]
+            ts2 = jsonpath.jsonpath(extJsonData, "$..photoTakenTime.timestamp")[0]
+            if not ts2 is None and int(ts2) > 930063138:
+                ts = ts2
             #print(jsonpath.jsonpath(extJsonData, "$.*.FileModifyDate"))
             print(ts)
             if not ts is None and ts != False:
@@ -50,6 +53,11 @@ def processFile(theFilePath):
                     print(out.decode("utf-8"))
                 except subprocess.CalledProcessError as err:
                     print(f'Process Error: {err}')
+                tsNum = float(ts)
+                os.utime(theFilePath, (tsNum, tsNum))
+                print(f'Updated date: {imageDate}')
+    else:
+        print(".json file NOT FOUND, Skipped...") 
     print("------------------------------")
 
 dir = sys.argv[1]
