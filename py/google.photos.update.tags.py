@@ -59,14 +59,15 @@ def processFile(theFilePath):
     else:
         print(".json file NOT FOUND, Skipped...") 
     print("------------------------------")
+# ----------------------------------------------------------------------------------------------------------------------
 
-dir = sys.argv[1]
-for root, dirs, files in os.walk(dir):
+if __name__ == '__main__':
+    dir = sys.argv[1]
+    exts = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif", ".webp", ".webp", ".cr2"]
+    for root, dirs, files in os.walk(dir):
 
-    for filename in files:
-
-        if not filename.lower().endswith(".jpg"):
-            continue
-
-        theFilePath = os.path.join(root, filename)
-        processFile(theFilePath)
+        for filename in files:
+            for ext in exts:
+                if filename.lower().endswith(ext):
+                    theFilePath = os.path.join(root, filename)
+                    processFile(theFilePath)
