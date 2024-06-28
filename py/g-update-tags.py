@@ -24,11 +24,11 @@ q = queue.Queue(150)
 filesListed = False
 
 
-def fileListed(theFilePath):
+def enqueueFile(theFilePath):
     global q
     logger = logging.getLogger("fileListed")
     logger.info(f"List file {theFilePath}")
-    q.put(theFilePath, block=True)
+    q.put(theFilePath)
 
 def processFile(theFilePath):
     logger = logging.getLogger("processFile")
@@ -36,21 +36,14 @@ def processFile(theFilePath):
     jsonFilePath = f'{theFilePath}.json'
     with open(jsonFilePath) as f:
         extJsonData = json.load(f)
-        #print(f'{jsonFilePath} : {extJsonData}')
-
-        logger.info("===")
         ts = jsonpath.jsonpath(extJsonData, "$..creationTime.timestamp")[0]
         ts2 = jsonpath.jsonpath(extJsonData, "$..photoTakenTime.timestamp")[0]
         if not ts2 is None and int(ts2) > 930063138:
             ts = ts2
-        #print(jsonpath.jsonpath(extJsonData, "$.*.FileModifyDate"))
         logger.info(ts)
         if not ts is None and ts != False:
             imageDate = datetime.datetime.fromtimestamp(float(ts)).strftime("%Y:%m:%d %H:%M:%S")
-            #print("--- " + imageDate)
-
             cmd1 = f'exiftool "-IFD0:ModifyDate={imageDate}" "{theFilePath}"'
-
             try:
                 out = subprocess.check_output([
                     "exiftool",
@@ -64,7 +57,7 @@ def processFile(theFilePath):
                 logger.info(f'Process Error: {err}')
             tsNum = float(ts)
             os.utime(theFilePath, (tsNum, tsNum))
-            logger.info(f'Updated date: {imageDate}')
+            logger.info(f'--- Updated date: {imageDate} for {theFilePath}')
 
 def dispatcher():
     global q
@@ -74,8 +67,10 @@ def dispatcher():
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         while True:
             logger.info("Getting file from queue")
-            aFile = q.get(block=True)
+            aFile = q.get()
             logger.info(f'Got {aFile}')
+            if aFile is None:
+                break
             executor.submit(processFile, aFile)
     logger.info(f"Finished")
 
@@ -91,7 +86,8 @@ def listFiles():
                     theFilePath = os.path.join(root, filename)
                     jsonFilePath = f'{theFilePath}.json'
                     if os.path.isfile(jsonFilePath):
-                        fileListed(theFilePath)
+                        enqueueFile(theFilePath)
+    enqueueFile(None)
     filesListed = True
     logger.info(f"List files {filesListed}")
 
