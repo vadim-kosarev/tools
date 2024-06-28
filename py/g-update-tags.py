@@ -6,13 +6,38 @@ import os
 import concurrent
 import queue
 from threading import Thread
+import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
 import json
 import jsonpath
 import subprocess
 import datetime
+import math
 
+class AtomicInteger():
+    def __init__(self, value=0):
+        self._value = int(value)
+        self._lock = threading.Lock()
+
+    def inc(self, d=1):
+        with self._lock:
+            self._value += int(d)
+            return self._value
+
+    def dec(self, d=1):
+        return self.inc(-d)
+
+    @property
+    def value(self):
+        with self._lock:
+            return self._value
+
+    @value.setter
+    def value(self, v):
+        with self._lock:
+            self._value = int(v)
+            return self._value
 
 logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
@@ -20,17 +45,21 @@ logging.basicConfig(filename='myapp.log', level=logging.INFO)
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--directory')
 args = parser.parse_args()
-q = queue.Queue(150)
+q = queue.Queue(10)
 filesListed = False
-
+filesFound = AtomicInteger()
+filesProcessed = AtomicInteger()
 
 def enqueueFile(theFilePath):
     global q
+    global filesFound
     logger = logging.getLogger("fileListed")
-    logger.info(f"List file {theFilePath}")
     q.put(theFilePath)
+    logger.info(f"[{filesFound.value}: {q.qsize()}] Listed file: {theFilePath}")
 
 def processFile(theFilePath):
+    global filesProcessed
+    global filesFound
     logger = logging.getLogger("processFile")
     logger.info(f"Processing file {theFilePath}")
     jsonFilePath = f'{theFilePath}.json'
@@ -57,7 +86,11 @@ def processFile(theFilePath):
                 logger.info(f'Process Error: {err}')
             tsNum = float(ts)
             os.utime(theFilePath, (tsNum, tsNum))
-            logger.info(f'--- Updated date: {imageDate} for {theFilePath}')
+            filesProcessed.inc()
+            logger.info(f'--- ['
+                        f'{math.floor(filesProcessed.value*100/filesFound.value)}% '
+                        f'{filesProcessed.value}/{filesFound.value}] '
+                        f'Updated date: {imageDate} for {theFilePath}')
 
 def dispatcher():
     global q
@@ -68,7 +101,7 @@ def dispatcher():
         while True:
             logger.info("Getting file from queue")
             aFile = q.get()
-            logger.info(f'Got {aFile}')
+            logger.info(f'[{q.qsize()}] Got {aFile}')
             if aFile is None:
                 break
             executor.submit(processFile, aFile)
@@ -76,6 +109,7 @@ def dispatcher():
 
 def listFiles():
     global filesListed
+    global filesFound
     logger = logging.getLogger("listFiles")
     dir = args.directory
     exts = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif", ".webp", ".webp", ".cr2"]
@@ -87,6 +121,7 @@ def listFiles():
                     jsonFilePath = f'{theFilePath}.json'
                     if os.path.isfile(jsonFilePath):
                         enqueueFile(theFilePath)
+                        filesFound.inc()
     enqueueFile(None)
     filesListed = True
     logger.info(f"List files {filesListed}")
