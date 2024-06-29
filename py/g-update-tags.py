@@ -43,7 +43,11 @@ logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='myapp.log', level=logging.INFO)
 parser = argparse.ArgumentParser()
-parser.add_argument('-d', '--directory')
+parser.add_argument('-d', '--directory',
+                    help='Directory where files are located',
+                    required=True,
+                    default=".")
+parser.print_help()
 args = parser.parse_args()
 q = queue.Queue(10)
 filesListed = False
@@ -97,7 +101,7 @@ def dispatcher():
     global filesListed
     logger = logging.getLogger("dispatcher")
     logger.info("Running dispatcher")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         while True:
             logger.info("Getting file from queue")
             aFile = q.get()
@@ -112,6 +116,7 @@ def listFiles():
     global filesFound
     logger = logging.getLogger("listFiles")
     dir = args.directory
+    logger.info(f'Processing directory "{dir}"')
     exts = [".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif", ".webp", ".webp", ".cr2"]
     for root, dirs, files in os.walk(dir):
         for filename in files:
@@ -131,7 +136,7 @@ if __name__ == '__main__':
     t1 = Thread(target=dispatcher)
     t2 = Thread(target=listFiles)
     t1.start()
-    time.sleep(5)
+    # time.sleep(5)
     t2.start()
     t1.join()
     t2.join()
