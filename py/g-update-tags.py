@@ -44,13 +44,6 @@ class AtomicInteger():
             self._sync.notify_all()
             return self._value
 
-    def decIfAvailable(self):
-        with self._sync:
-            while self._value <= 0:
-                self._sync.wait()
-            return self.dec()
-
-
 # ---------------------------------------------
 logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
@@ -61,12 +54,9 @@ parser.add_argument('-d', '--directory',
                     help='Directory where files are located',
                     required=True,
                     default=".")
-parser.add_argument("-l", "--limit", default=maxWorkers * 10,
-                    help="Holds scanning till free processing slots available. Size of the args queue.")
 parser.print_help()
 args = parser.parse_args()
 q = queue.Queue(maxWorkers)
-freeSlots = AtomicInteger(args.limit)
 filesFound = AtomicInteger()
 filesProcessed = AtomicInteger()
 
@@ -74,10 +64,9 @@ filesProcessed = AtomicInteger()
 def dumpInfo(label=""):
     global maxWorkers
     global q
-    global freeSlots
     global filesFound
     global filesProcessed
-    logger.info(f'[SYS] [{label}] maxWorker: {maxWorkers}, q: {q.qsize()}, freeSlots: {freeSlots.value}, '
+    logger.info(f'[SYS] [{label}] maxWorker: {maxWorkers}, q: {q.qsize()}, '
                 f'filesFound: {filesFound.value}, filesProcessed: {filesProcessed.value}')
 
 
@@ -94,7 +83,6 @@ def enqueueFile(theFilePath):
 def processFile(theFilePath):
     global filesProcessed
     global filesFound
-    global freeSlots
     logger = logging.getLogger("processFile")
     logger.info(f"Processing file {theFilePath}")
     jsonFilePath = f'{theFilePath}.json'
@@ -126,7 +114,6 @@ def processFile(theFilePath):
                         f'{math.floor(filesProcessed.value * 100 / filesFound.value)}% '
                         f'{filesProcessed.value}/{filesFound.value}] '
                         f'Updated date: {imageDate} for {theFilePath}')
-    freeSlots.inc()
     dumpInfo("processFile")
 
 
@@ -143,8 +130,6 @@ def dispatcher():
             logger.info(f'[{q.qsize()}] Got {aFile}')
             if aFile is None:
                 break
-            if args.limit:
-                freeSlots.decIfAvailable()
             executor.submit(processFile, aFile)
             dumpInfo("dispatcher.while")
 
