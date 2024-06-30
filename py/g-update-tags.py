@@ -57,15 +57,21 @@ class MyThreadPoolExecutor(ThreadPoolExecutor):
 logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='myapp.log', level=logging.INFO)
-maxWorkers = 16
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--directory',
                     help='Directory where files are located',
                     required=True,
                     default=".")
-parser.add_argument('-x', '--max_threads', type=int, default=None, help='Maximum number of threads')
+parser.add_argument('-w', '--max_workers', type=int, default=16,
+                    help='Maximum number of Workers (concurrent file processors)')
+parser.add_argument('-x', '--max_threads', type=int, default=None,
+                    help='Maximum number of Threads for scheduling tasks (holding listFiles)')
+parser.add_argument('-v', '--verbose', type=bool, default=False,
+                    help='Show verbose output')
 parser.print_help()
 args = parser.parse_args()
+
+maxWorkers = args.max_workers
 q = queue.Queue(maxWorkers)
 filesFound = AtomicInteger()
 filesProcessed = AtomicInteger()
@@ -73,6 +79,8 @@ filesProcessed = AtomicInteger()
 
 # ---------------------------------------------
 def dumpInfo(label=""):
+    if not args.verbose:
+        return
     global maxWorkers
     global q
     global filesFound
@@ -91,10 +99,10 @@ def enqueueFile(theFilePath):
 
 
 # ---------------------------------------------
-def processFile(theFilePath):
+def processFile(theFilePath, label):
     global filesProcessed
     global filesFound
-    logger = logging.getLogger("processFile")
+    logger = logging.getLogger(f"processFile-{label}")
     logger.info(f"Processing file {theFilePath}")
     jsonFilePath = f'{theFilePath}.json'
     with open(jsonFilePath) as f:
@@ -134,15 +142,17 @@ def dispatcher():
     global args
     logger = logging.getLogger("dispatcher")
     logger.info("Running dispatcher")
+    label = 1
     with MyThreadPoolExecutor(max_workers=maxWorkers, max_threads=args.max_threads) as executor:
         while True:
             logger.info("Getting file from queue")
             aFile = q.get()
-            logger.info(f'[{q.qsize()}] Got {aFile}')
+            logger.info(f'[{q.qsize()}] Got {label}')
             if aFile is None:
                 break
-            executor.submit(processFile, aFile)
+            executor.submit(processFile, aFile, label)
             dumpInfo("dispatcher.while")
+            label += 1
 
     dumpInfo("dispatcher.finished")
     logger.info(f"Finished")
