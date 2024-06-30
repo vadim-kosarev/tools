@@ -44,6 +44,15 @@ class AtomicInteger():
             self._sync.notify_all()
             return self._value
 
+
+class MyThreadPoolExecutor(ThreadPoolExecutor):
+    def __init__(self, max_workers=None, thread_name_prefix='',
+                 initializer=None, initargs=(), max_threads=None):
+        super(MyThreadPoolExecutor, self).__init__(max_workers, thread_name_prefix, initializer, initargs)
+        if max_threads:
+            self._work_queue = queue.Queue(maxsize=max_threads)
+
+
 # ---------------------------------------------
 logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
@@ -54,11 +63,13 @@ parser.add_argument('-d', '--directory',
                     help='Directory where files are located',
                     required=True,
                     default=".")
+parser.add_argument('-x', '--max_threads', type=int, default=None, help='Maximum number of threads')
 parser.print_help()
 args = parser.parse_args()
 q = queue.Queue(maxWorkers)
 filesFound = AtomicInteger()
 filesProcessed = AtomicInteger()
+
 
 # ---------------------------------------------
 def dumpInfo(label=""):
@@ -123,7 +134,7 @@ def dispatcher():
     global args
     logger = logging.getLogger("dispatcher")
     logger.info("Running dispatcher")
-    with ThreadPoolExecutor(max_workers=maxWorkers) as executor:
+    with MyThreadPoolExecutor(max_workers=maxWorkers, max_threads=args.max_threads) as executor:
         while True:
             logger.info("Getting file from queue")
             aFile = q.get()
