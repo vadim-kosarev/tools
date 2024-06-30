@@ -1,28 +1,32 @@
 #!/bin/python
 import argparse
-import logging.config
+import datetime
+import json
 import logging
+import logging.config
+import math
 import os
-import concurrent
 import queue
-from threading import Thread
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-import time
-import json
-import jsonpath
-import subprocess
-import datetime
-import math
+from threading import Thread
 
+import jsonpath
+
+
+# ---------------------------------------------
 class AtomicInteger():
     def __init__(self, value=0):
         self._value = int(value)
         self._lock = threading.Lock()
+        self._sync = threading.Condition()
 
     def inc(self, d=1):
         with self._lock:
             self._value += int(d)
+            with self._sync:
+                self._sync.notify_all()
             return self._value
 
     def dec(self, d=1):
@@ -37,22 +41,45 @@ class AtomicInteger():
     def value(self, v):
         with self._lock:
             self._value = int(v)
+            self._sync.notify_all()
             return self._value
 
+    def decIfAvailable(self):
+        with self._sync:
+            while self._value <= 0:
+                self._sync.wait()
+            return self.dec()
+
+
+# ---------------------------------------------
 logging.config.fileConfig('logging.ini')
 logger = logging.getLogger(__name__)
 logging.basicConfig(filename='myapp.log', level=logging.INFO)
+maxWorkers = 16
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--directory',
                     help='Directory where files are located',
                     required=True,
                     default=".")
+parser.add_argument("-l", "--limit", default=maxWorkers * 10,
+                    help="Holds scanning till free processing slots available. Size of the args queue.")
 parser.print_help()
 args = parser.parse_args()
-q = queue.Queue(10)
-filesListed = False
+q = queue.Queue(maxWorkers)
+freeSlots = AtomicInteger(args.limit)
 filesFound = AtomicInteger()
 filesProcessed = AtomicInteger()
+
+# ---------------------------------------------
+def dumpInfo(label=""):
+    global maxWorkers
+    global q
+    global freeSlots
+    global filesFound
+    global filesProcessed
+    logger.info(f'[SYS] [{label}] maxWorker: {maxWorkers}, q: {q.qsize()}, freeSlots: {freeSlots.value}, '
+                f'filesFound: {filesFound.value}, filesProcessed: {filesProcessed.value}')
+
 
 def enqueueFile(theFilePath):
     global q
@@ -60,10 +87,14 @@ def enqueueFile(theFilePath):
     logger = logging.getLogger("fileListed")
     q.put(theFilePath)
     logger.info(f"[{filesFound.value}: {q.qsize()}] Listed file: {theFilePath}")
+    dumpInfo("enqueueFile")
 
+
+# ---------------------------------------------
 def processFile(theFilePath):
     global filesProcessed
     global filesFound
+    global freeSlots
     logger = logging.getLogger("processFile")
     logger.info(f"Processing file {theFilePath}")
     jsonFilePath = f'{theFilePath}.json'
@@ -92,27 +123,37 @@ def processFile(theFilePath):
             os.utime(theFilePath, (tsNum, tsNum))
             filesProcessed.inc()
             logger.info(f'--- ['
-                        f'{math.floor(filesProcessed.value*100/filesFound.value)}% '
+                        f'{math.floor(filesProcessed.value * 100 / filesFound.value)}% '
                         f'{filesProcessed.value}/{filesFound.value}] '
                         f'Updated date: {imageDate} for {theFilePath}')
+    freeSlots.inc()
+    dumpInfo("processFile")
 
+
+# ---------------------------------------------
 def dispatcher():
     global q
-    global filesListed
+    global args
     logger = logging.getLogger("dispatcher")
     logger.info("Running dispatcher")
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=maxWorkers) as executor:
         while True:
             logger.info("Getting file from queue")
             aFile = q.get()
             logger.info(f'[{q.qsize()}] Got {aFile}')
             if aFile is None:
                 break
+            if args.limit:
+                freeSlots.decIfAvailable()
             executor.submit(processFile, aFile)
+            dumpInfo("dispatcher.while")
+
+    dumpInfo("dispatcher.finished")
     logger.info(f"Finished")
 
+
+# ---------------------------------------------
 def listFiles():
-    global filesListed
     global filesFound
     logger = logging.getLogger("listFiles")
     dir = args.directory
@@ -127,16 +168,18 @@ def listFiles():
                     if os.path.isfile(jsonFilePath):
                         enqueueFile(theFilePath)
                         filesFound.inc()
+                        dumpInfo("listFiles.inc")
     enqueueFile(None)
-    filesListed = True
-    logger.info(f"List files {filesListed}")
+    logger.info(f"Finished: {filesFound.value} file(s)")
 
+
+# ---------------------------------------------
 if __name__ == '__main__':
     logger.info("Started...")
     t1 = Thread(target=dispatcher)
     t2 = Thread(target=listFiles)
     t1.start()
-    # time.sleep(5)
     t2.start()
     t1.join()
     t2.join()
+    logger.info("Finished...")
