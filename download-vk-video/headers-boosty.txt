@@ -1,0 +1,15 @@
+GET /?expires=1742954759027&srcIp=176.115.147.200&pr=42&srcAg=CHROME&ms=185.226.53.40&type=2&sig=tnd8HMEmuL0&ct=11&urls=45.136.20.28&clientType=18&id=7008066079487&bytes=15260766-17106994 HTTP/1.1
+Accept: */*
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7
+Connection: keep-alive
+Host: vd331.okcdn.ru
+Origin: https://boosty.to
+Referer: https://boosty.to/paxandoma
+Sec-Fetch-Dest: empty
+Sec-Fetch-Mode: cors
+Sec-Fetch-Site: cross-site
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36
+sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"
+sec-ch-ua-mobile: ?0
+sec-ch-ua-platform: "Windows"
