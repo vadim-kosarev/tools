@@ -49,7 +49,7 @@ transport.tls.force = false
 
 # If you want to support virtual host, you must set the http port for listening (optional)
 # Note: http port and https port can be same with bindPort
-vhostHTTPPort = 7501
+#vhostHTTPPort = 7501
 #vhostHTTPSPort = 443
 
 # Response header timeout(seconds) for vhost http server, default is 60s
@@ -103,7 +103,7 @@ webServer.password = "noname564"
 # auth.additionalScopes = ["HeartBeats", "NewWorkConns"]
 
 # auth token
-auth.token = "my_secure_token3344"
+auth.token = "470720451211462921230901855180"
 
 # oidc issuer specifies the issuer to verify OIDC tokens with.
 #auth.oidc.issuer = ""

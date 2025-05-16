@@ -5,14 +5,5 @@ services:
     restart: always
     network_mode: "host"
     volumes:
-      - ./frps1.ini:/etc/frp/frps1.ini
-    command: ["-c", "/etc/frp/frps1.ini"]
-
-  frps2:
-    image: snowdreamtech/frps
-    container_name: frps2
-    restart: always
-    network_mode: "host"
-    volumes:
-      - ./frps2.ini:/etc/frp/frps2.ini
-    command: ["-c", "/etc/frp/frps2.ini"]
+      - ./frps1.ini:/etc/frp/frps1.toml
+    command: ["-c", "/etc/frp/frps1.toml"]
