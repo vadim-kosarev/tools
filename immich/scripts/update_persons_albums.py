@@ -10,7 +10,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 # Конфигурация
-IMMICH_API_URL = "http://localhost:2283/api"
+IMMICH_API_URL = "http://brightsky:2283/api"
 API_KEY = "39JmYw9mAA7jFUyuRTWgmbOzizBTOXnaYe1l8xgTw"
 PERSON_NAMES = ["Vlad Kosarev", "Seva Kosarev", "Natalia Kosareva", "Andrey Napalkov", "Vadim Kosarev", "Vsevolod Fadeev", "Maria Sitnova", "Lisa Sitnova", "Polina Sitnova"]  # Список имен людей
 MAX_ASSETS = "all"  # Максимум активов для обработки (100 или "all")
