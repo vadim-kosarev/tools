@@ -1,0 +1,6 @@
+collectors:
+  enabled: cpu,cs,logical_disk,net,os,system,textfile
+
+collector:
+  textfile:
+    directories: C:\monitoring
