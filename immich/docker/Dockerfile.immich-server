@@ -1,0 +1,16 @@
+FROM ghcr.io/immich-app/immich-server:release
+
+# 1. Настройка переменных окружения для UTF-8
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONIOENCODING=UTF-8
+
+# 2. Создание символических ссылок для поддержки UTF-8
+RUN mkdir -p /usr/lib/locale && \
+    ln -sf /usr/lib/locale/C.UTF-8 /usr/lib/locale/en_US.utf8 && \
+    ln -sf /usr/lib/locale/C.UTF-8 /usr/lib/locale/ru_RU.utf8
+
+# 3. Проверка (можно удалить после тестирования)
+RUN echo "Проверка локалей:" && \
+    python3 -c "import sys; print(f'Кодировка Python: {sys.stdout.encoding}')" && \
+    ls -l /usr/lib/locale/

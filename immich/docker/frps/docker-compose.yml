@@ -1,0 +1,9 @@
+services:
+  frps1:
+    image: snowdreamtech/frps
+    container_name: frps1
+    restart: always
+    network_mode: "host"
+    volumes:
+      - ./frps1.toml:/etc/frp/frps1.toml
+    command: ["-c", "/etc/frp/frps1.toml"]
