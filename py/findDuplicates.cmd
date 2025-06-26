@@ -10,10 +10,10 @@ set args=%args% --csv findDuplicates.csv
 
 set args=%args% %*
 
-set args=%args% X:\DCIM-Note13Pro
-set args=%args% X:\O-HomeVideo
-set args=%args% X:\O-Photos
-set args=%args% X:\takeout.google.com
+::set args=%args% X:\DCIM-Note13Pro
+::set args=%args% X:\O-HomeVideo
+::set args=%args% X:\O-Photos
+::set args=%args% X:\takeout.google.com
 set args=%args% X:\YD-Photos\Sorted
 
 
