@@ -30,7 +30,7 @@ services:
       - vkshare:/mnt/media/vkshare:ro
       - o-homevideo:/mnt/media/o-homevideo:ro
       - o-photos:/mnt/media/o-photos:ro
-      - yd-photos:/mnt/media/yd-photos:ro
+      - yd-photos:/mnt/media/yd-photos/Sorted:ro
       - google-takeout:/mnt/media/google-takeout:ro
       - o-homevideo:/mnt/media/o-homevideo:ro
     env_file:
@@ -122,9 +122,13 @@ services:
     command: [ './run.sh', '-disable-reporting' ]
     ports:
       - 3000:3000
-    image: grafana/grafana:11.5.2-ubuntu@sha256:8b5858c447e06fd7a89006b562ba7bba7c4d5813600c7982374c41852adefaeb
+#    image: grafana/grafana:11.5.2-ubuntu@sha256:8b5858c447e06fd7a89006b562ba7bba7c4d5813600c7982374c41852adefaeb
+    image: grafana/grafana:latest
     volumes:
       - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
 
   frpc:
     image: snowdreamtech/frpc
@@ -135,6 +139,14 @@ services:
     volumes:
       - ./frpc.ini:/etc/frp/frpc.ini
     command: ["-c", "/etc/frp/frpc.ini"]
+
+
+  redis-commander:
+    image: rediscommander/redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
 
 volumes:
   model-cache:
@@ -166,7 +178,7 @@ volumes:
     driver: local
     driver_opts:
       o: user=user1,password=user1,iocharset=utf8
-      device: //luigi/X/YD-Photos
+      device: //luigi/X/YD-Photos/Sorted
       type: cifs
 
   google-takeout:
