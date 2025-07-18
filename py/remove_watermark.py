@@ -4,9 +4,9 @@ import os
 from glob import glob
 
 # Пути
-input_folder = 'png600dpi'
-output_folder = 'png_out'
-watermark_path = 'WATERMARK.png'
+input_folder = 'a3_600dpi_pdf'
+output_folder = 'a3_600dpi_pdf_clean'
+watermark_path = 'a3_600dpi_pdf.watermark.png'
 
 # Создать выходную папку, если не существует
 os.makedirs(output_folder, exist_ok=True)
