@@ -1,3 +1,9 @@
+
+function Is-Numeric {
+    param ($value)
+    return ($value -is [int] -or $value -is [double] -or $value -is [decimal])
+}
+
 # Параметры
 $iperfServer = "vkosarev.name"   # IP или хост iperf3-сервера
 $port = 5201
@@ -56,10 +62,12 @@ foreach ($dir in @("sum_sent", "sum_received")) {
 # === Протокол и параметры теста ===
 $start = $json.start.test_start
 foreach ($param in $start.PSObject.Properties) {
-    $name = "iperf3_param_$($param.Name)"
-    $metrics += "# HELP $name Test parameter $($param.Name)"
-    $metrics += "# TYPE $name gauge"
-    $metrics += "$name $($param.Value)"
+	if (Is-Numeric $param.Value) {
+		$name = "iperf3_param_$($param.Name)"
+		$metrics += "# HELP $name Test parameter $($param.Name)"
+		$metrics += "# TYPE $name gauge"
+		$metrics += "$name $($param.Value)"
+	}
 }
 
 # === TCP congestion control ===
