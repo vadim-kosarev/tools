@@ -31,14 +31,14 @@ $metrics = @()
 # === Базовая инфа ===
 $metrics += "# HELP iperf3_start_time_utc_seconds Test start timestamp (UTC)"
 $metrics += "# TYPE iperf3_start_time_utc_seconds gauge"
-$metrics += "iperf3_start_time_utc_seconds $($json.start.timestamp.timesecs) $timestamp"
+$metrics += "iperf3_start_time_utc_seconds $($json.start.timestamp.timesecs)"
 
 # === CPU ===
 $cpu = $json.end.cpu_utilization_percent
 foreach ($field in $cpu.PSObject.Properties) {
     $metrics += "# HELP iperf3_cpu_$($field.Name) CPU usage percent"
     $metrics += "# TYPE iperf3_cpu_$($field.Name) gauge"
-    $metrics += "iperf3_cpu_$($field.Name) $($field.Value) $timestamp"
+    $metrics += "iperf3_cpu_$($field.Name) $($field.Value)"
 }
 
 # === Суммарная передача ===
@@ -46,11 +46,11 @@ foreach ($dir in @("sum_sent", "sum_received")) {
     $obj = $json.end.$dir
     $metrics += "# HELP iperf3_${dir}_bytes Bytes transferred"
     $metrics += "# TYPE iperf3_${dir}_bytes gauge"
-    $metrics += "iperf3_${dir}_bytes $($obj.bytes) $timestamp"
+    $metrics += "iperf3_${dir}_bytes $($obj.bytes)"
 
     $metrics += "# HELP iperf3_${dir}_bps Bits per second"
     $metrics += "# TYPE iperf3_${dir}_bps gauge"
-    $metrics += "iperf3_${dir}_bps $($obj.bits_per_second) $timestamp"
+    $metrics += "iperf3_${dir}_bps $($obj.bits_per_second)"
 }
 
 # === Протокол и параметры теста ===
@@ -59,24 +59,25 @@ foreach ($param in $start.PSObject.Properties) {
     $name = "iperf3_param_$($param.Name)"
     $metrics += "# HELP $name Test parameter $($param.Name)"
     $metrics += "# TYPE $name gauge"
-    $metrics += "$name $($param.Value) $timestamp"
+    $metrics += "$name $($param.Value)"
 }
 
 # === TCP congestion control ===
 $cc = $json.end.receiver_tcp_congestion
 $metrics += "# HELP iperf3_tcp_congestion_control TCP congestion control algorithm"
 $metrics += "# TYPE iperf3_tcp_congestion_control gauge"
-$metrics += "iperf3_tcp_congestion_control{algo=`"$cc`"} 1 $timestamp"
+$metrics += "iperf3_tcp_congestion_control{algo=`"$cc`"} 1"
 
 # === Последний интервал ===
 $lastSum = $json.intervals[-1].sum
 $metrics += "# HELP iperf3_last_interval_bytes Bytes in last interval"
 $metrics += "# TYPE iperf3_last_interval_bytes gauge"
-$metrics += "iperf3_last_interval_bytes $($lastSum.bytes) $timestamp"
+$metrics += "iperf3_last_interval_bytes $($lastSum.bytes)"
 
 $metrics += "# HELP iperf3_last_interval_bps Bits per second in last interval"
 $metrics += "# TYPE iperf3_last_interval_bps gauge"
-$metrics += "iperf3_last_interval_bps $($lastSum.bits_per_second) $timestamp"
+$metrics += "iperf3_last_interval_bps $($lastSum.bits_per_second)"
 
 # === Сохраняем ===
-Set-Content -Path $outputFile -Value ($metrics -join "`n") -Encoding UTF8
+#Set-Content -Path $outputFile -Value ($metrics -join "`n") -Encoding UTF8
+$metrics -join "`n" | Out-File -FilePath $outputFile -Encoding utf8 -Force
