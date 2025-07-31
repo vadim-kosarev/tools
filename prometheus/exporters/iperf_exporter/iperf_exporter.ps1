@@ -15,7 +15,7 @@ if (-not (Test-Path "C:\monitoring")) {
 }
 
 # Выполнение теста (10 секунд)
-$iperfOutput = & .\iperf3.exe -c $iperfServer -p $port -J 2>&1
+$iperfOutput = & .\iperf3.exe -c $iperfServer -p $port -J -t 5 2>&1
 
 # Преобразуем в JSON-объект
 try {
