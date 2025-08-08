@@ -23,6 +23,9 @@ services:
       - LANG=C.UTF-8
       - LC_ALL=C.UTF-8
       - PYTHONIOENCODING=UTF-8
+      - IMMICH_SHARED_FACES=true
+      - IMMICH_FACE_RECOGNITION_ENABLED=true
+      - IMMICH_MACHINE_LEARNING_ENABLED=true
     volumes:
       - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload:rw
       - /etc/localtime:/etc/localtime:ro
