@@ -34,6 +34,7 @@ services:
       - o-homevideo:/mnt/media/o-homevideo:ro
       - o-photos:/mnt/media/o-photos:ro
       - yd-photos:/mnt/media/yd-photos/Sorted:ro
+      - yd2-photos:/mnt/media/yd2-photos:ro
       - google-takeout:/mnt/media/google-takeout:ro
       - o-homevideo:/mnt/media/o-homevideo:ro
     env_file:
@@ -175,6 +176,13 @@ volumes:
     driver_opts:
       o: user=user1,password=user1,iocharset=utf8
       device: //luigi/X/O-Photos
+      type: cifs
+
+  yd2-photos:
+    driver: local
+    driver_opts:
+      o: user=user1,password=user1,iocharset=utf8
+      device: //luigi/YandexDisk2/Photos
       type: cifs
 
   yd-photos:
