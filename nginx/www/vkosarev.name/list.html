@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Request List</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+            position: relative;
+        }
+        th {
+            background-color: #f8f8f8;
+            cursor: pointer;
+            position: relative;
+        }
+        th:hover {
+            background-color: #eee;
+        }
+        th.active {
+            color: #0066cc;
+        }
+        th.active::after {
+            content: '';
+            display: inline-block;
+            width: 0;
+            height: 0;
+            margin-left: 5px;
+            vertical-align: middle;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+        }
+        th.active.asc::after {
+            border-bottom: 4px solid #0066cc;
+        }
+        th.active.desc::after {
+            border-top: 4px solid #0066cc;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .pagination a {
+            color: black;
+            float: left;
+            padding: 8px 16px;
+            text-decoration: none;
+            border: 1px solid #ddd;
+            margin: 0 4px;
+            cursor: pointer;
+        }
+        .pagination a.active {
+            background-color: #0066cc;
+            color: white;
+            border: 1px solid #0066cc;
+        }
+        .pagination a:hover:not(.active) {
+            background-color: #ddd;
+        }
+        .search-box {
+            margin-bottom: 20px;
+            display: flex;
+        }
+        .search-box input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .search-box button {
+            padding: 10px 20px;
+            background-color: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+        .search-box button:hover {
+            background-color: #0052a3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Request List</h1>
+        <div class="search-box">
+            <input type="text" id="search-input" placeholder="Search...">
+            <button id="search-button">Search</button>
+        </div>
+        <div id="table-container">
+            <table id="data-table">
+                <thead>
+                    <tr>
+                        <th data-column="id">ID</th>
+                        <th data-column="token">Token</th>
+                        <th data-column="phone">Phone</th>
+                        <th data-column="clientIP">Client IP</th>
+                        <th data-column="userAgent">User Agent</th>
+                        <th data-column="referer">Referer</th>
+                        <th data-column="status">Status</th>
+                        <th data-column="created_at">Created At</th>
+                    </tr>
+                </thead>
+                <tbody id="data-body">
+                    <!-- Data will be populated here -->
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="pagination">
+            <!-- Pagination will be populated here -->
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // State variables
+            let currentPage = 1;
+            let pageSize = 10;
+            let searchTerm = '';
+            let orderColumn = 'id';
+            let orderDirection = 'desc';
+            let totalPages = 0;
+            let timestampMs = null; // New state variable for timestamp_ms
+
+            // Elements
+            const dataTable = document.getElementById('data-table');
+            const dataBody = document.getElementById('data-body');
+            const pagination = document.getElementById('pagination');
+            const searchInput = document.getElementById('search-input');
+            const searchButton = document.getElementById('search-button');
+
+            // Read parameters from URL hash
+            function readFromHash() {
+                if (location.hash) {
+                    try {
+                        const params = {};
+                        const hashParams = location.hash.substring(1).split('&');
+
+                        for (const param of hashParams) {
+                            if (param.includes('=')) {
+                                const [key, value] = param.split('=');
+                                params[key] = decodeURIComponent(value);
+                            }
+                        }
+
+                        if (params.page && !isNaN(parseInt(params.page))) {
+                            currentPage = parseInt(params.page);
+                        }
+
+                        if (params.pageSize && !isNaN(parseInt(params.pageSize))) {
+                            pageSize = parseInt(params.pageSize);
+                        }
+
+                        if (params.search) {
+                            searchTerm = params.search;
+                            searchInput.value = searchTerm;
+                        }
+
+                        if (params.order) {
+                            if (params.order.includes(':')) {
+                                const [col, dir] = params.order.split(':');
+                                orderColumn = col;
+                                orderDirection = dir;
+                            } else {
+                                orderColumn = params.order;
+                            }
+                        }
+
+                        if (params.timestamp_ms && !isNaN(parseInt(params.timestamp_ms))) {
+                            timestampMs = parseInt(params.timestamp_ms);
+                        }
+                    } catch (e) {
+                        console.error("Error parsing URL hash", e);
+                    }
+                }
+            }
+
+            // Update URL hash with current parameters
+            function updateHash() {
+                const params = [];
+
+                if (currentPage !== 1) {
+                    params.push(`page=${currentPage}`);
+                }
+
+                if (pageSize !== 10) {
+                    params.push(`pageSize=${pageSize}`);
+                }
+
+                if (searchTerm) {
+                    params.push(`search=${encodeURIComponent(searchTerm)}`);
+                }
+
+                if (orderColumn !== 'id' || orderDirection !== 'desc') {
+                    params.push(`order=${orderColumn}:${orderDirection}`);
+                }
+
+                if (timestampMs !== null) {
+                    params.push(`timestamp_ms=${timestampMs}`);
+                }
+
+                const hash = params.length > 0 ? '#' + params.join('&') : '';
+
+                // Update URL without reloading the page
+                if (history.replaceState) {
+                    history.replaceState(null, null, window.location.pathname + hash);
+                } else {
+                    location.hash = hash;
+                }
+            }
+
+            // Fetch data from API
+            function fetchData() {
+                let url = `/api/list?page=${currentPage}&page_size=${pageSize}&search=${encodeURIComponent(searchTerm)}&order=${orderColumn}:${orderDirection}`;
+
+                // Add timestamp_ms parameter if it exists
+                if (timestampMs !== null) {
+                    url += `&timestamp_ms=${timestampMs}`;
+                }
+
+                updateHash();
+
+                fetch(url)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Network response was not ok');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        renderTable(data.data);
+                        renderPagination(data.page, data.total_pages);
+                        totalPages = data.total_pages;
+                    })
+                    .catch(error => {
+                        console.error('Error fetching data:', error);
+                        dataBody.innerHTML = `<tr><td colspan="8" style="text-align:center">Error loading data: ${error.message}</td></tr>`;
+                    });
+            }
+
+            // Render table with data
+            function renderTable(data) {
+                if (data.length === 0) {
+                    dataBody.innerHTML = '<tr><td colspan="8" style="text-align:center">No data found</td></tr>';
+                    return;
+                }
+
+                dataBody.innerHTML = '';
+                data.forEach(item => {
+                    const row = document.createElement('tr');
+
+                    // Format date in user's local timezone
+                    let createdAt = item.created_at;
+                    if (createdAt) {
+                        try {
+                            // Преобразуем timestamp из миллисекунд в объект Date
+                            let timestampValue = parseInt(createdAt);
+                            if (timestampValue < 10000000000) {
+                                timestampValue *= 1000;
+                            }
+
+                            const date = new Date(timestampValue);
+
+                            // Check if date is valid
+                            if (!isNaN(date.getTime())) {
+                                const dateOptions = {
+                                    year: 'numeric',
+                                    month: '2-digit',
+                                    day: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                    hour12: false
+                                };
+
+                                createdAt = date.toLocaleString(navigator.language || 'en-US', dateOptions);
+
+                                // Add data-timestamp attribute for sorting
+                                row.setAttribute('data-timestamp', date.getTime());
+                            }
+                        } catch (e) {
+                            console.error('Error formatting date:', e);
+                        }
+                    }
+
+                    // Создаем HTML-содержимое строки таблицы
+                    const cellContents = [
+                        { value: item.id || '-', key: 'id' },
+                        { value: item.token || '-', key: 'token' },
+                        { value: item.phone || '-', key: 'phone' },
+                        { value: item.clientIP || '-', key: 'clientIP' },
+                        { value: item.userAgent || '-', key: 'userAgent' },
+                        { value: item.referer || '-', key: 'referer' },
+                        { value: item.status || '-', key: 'status' },
+                        { value: createdAt || '-', key: 'created_at' }
+                    ];
+
+                    // Создаем каждую ячейку отдельно
+                    cellContents.forEach(cell => {
+                        const td = document.createElement('td');
+                        td.textContent = cell.value;
+
+                        // Добавляем title для всех ячеек, чтобы показывать полное содержимое при наведении
+                        td.setAttribute('title', cell.value);
+
+                        // Для изображений можно было бы использовать alt, но здесь это не требуется
+                        row.appendChild(td);
+                    });
+
+                    dataBody.appendChild(row);
+                });
+            }
+
+            // Render pagination
+            function renderPagination(currentPage, totalPages) {
+                pagination.innerHTML = '';
+
+                // Previous button
+                if (currentPage > 1) {
+                    const prevLink = document.createElement('a');
+                    prevLink.innerHTML = '&laquo;';
+                    prevLink.addEventListener('click', () => {
+                        goToPage(currentPage - 1);
+                    });
+                    pagination.appendChild(prevLink);
+                }
+
+                // Page numbers
+                let startPage = Math.max(1, currentPage - 2);
+                let endPage = Math.min(totalPages, currentPage + 2);
+
+                // Always show at least 5 pages if available
+                if (endPage - startPage < 4 && totalPages > 4) {
+                    if (startPage === 1) {
+                        endPage = Math.min(5, totalPages);
+                    } else if (endPage === totalPages) {
+                        startPage = Math.max(1, totalPages - 4);
+                    }
+                }
+
+                for (let i = startPage; i <= endPage; i++) {
+                    const pageLink = document.createElement('a');
+                    pageLink.textContent = i;
+                    if (i === currentPage) {
+                        pageLink.classList.add('active');
+                    }
+                    pageLink.addEventListener('click', () => {
+                        goToPage(i);
+                    });
+                    pagination.appendChild(pageLink);
+                }
+
+                // Next button
+                if (currentPage < totalPages) {
+                    const nextLink = document.createElement('a');
+                    nextLink.innerHTML = '&raquo;';
+                    nextLink.addEventListener('click', () => {
+                        goToPage(currentPage + 1);
+                    });
+                    pagination.appendChild(nextLink);
+                }
+            }
+
+            // Change page
+            function goToPage(page) {
+                if (page < 1 || page > totalPages) return;
+                currentPage = page;
+                fetchData();
+            }
+
+            // Set up column sorting
+            document.querySelectorAll('th[data-column]').forEach(th => {
+                th.addEventListener('click', function() {
+                    const column = this.dataset.column;
+
+                    // Toggle direction if same column clicked
+                    if (column === orderColumn) {
+                        orderDirection = orderDirection === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        orderColumn = column;
+                        orderDirection = 'asc';
+                    }
+
+                    // Update column header styles
+                    document.querySelectorAll('th').forEach(el => el.classList.remove('active', 'asc', 'desc'));
+                    this.classList.add('active', orderDirection);
+
+                    // Reset to first page when sorting
+                    currentPage = 1;
+                    fetchData();
+                });
+            });
+
+            // Search functionality
+            searchButton.addEventListener('click', function() {
+                searchTerm = searchInput.value.trim();
+                currentPage = 1; // Reset to first page
+                fetchData();
+            });
+
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    searchTerm = searchInput.value.trim();
+                    currentPage = 1;
+                    fetchData();
+                }
+            });
+
+            // Initialize sorting indicators based on current state
+            function initSortIndicators() {
+                document.querySelectorAll('th[data-column]').forEach(th => {
+                    if (th.dataset.column === orderColumn) {
+                        th.classList.add('active', orderDirection);
+                    }
+                });
+            }
+
+            // Initial setup
+            readFromHash();
+            initSortIndicators();
+            fetchData();
+        });
+    </script>
+</body>
+</html>
