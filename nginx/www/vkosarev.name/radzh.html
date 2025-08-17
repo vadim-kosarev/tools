@@ -164,6 +164,16 @@
         #records-container {
             margin-top: 15px;
         }
+        .sound-toggle {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-left: auto;
+            cursor: pointer;
+        }
+        .sound-toggle input {
+            margin: 0;
+        }
 
         /* Responsive adjustments */
         @media (max-width: 767px) {
@@ -208,6 +218,11 @@
                 <input type="number" id="poll-interval" value="5000" min="1000">
             </div>
             <button id="reset-timestamp">Reset Timestamp</button>
+            <label class="sound-toggle">
+                <input type="checkbox" id="sound-toggle" checked>
+                Звуковые уведомления
+            </label>
+            <button id="test-sound">Проверить звук</button>
         </div>
 
         <div id="table-container">
@@ -225,6 +240,7 @@
             let pollingInterval = 5000; // 5 seconds default
             let recordsFound = 0;
             let pollingTimer = null;
+            let isSoundEnabled = true;
 
             // Elements
             const recordsContainer = document.getElementById('records-container');
@@ -234,6 +250,8 @@
             const togglePollingButton = document.getElementById('toggle-polling');
             const pollIntervalInput = document.getElementById('poll-interval');
             const resetTimestampButton = document.getElementById('reset-timestamp');
+            const soundToggle = document.getElementById('sound-toggle');
+            const testSoundButton = document.getElementById('test-sound');
 
             // Format and display the initial timestamp
             const formatDateTime = (timestamp) => {
@@ -266,6 +284,11 @@
 
                         // Render new records in the table
                         renderNewRecords(data.data);
+
+                        // Play notification sound if enabled
+                        if (isSoundEnabled) {
+                            playNotificationSound();
+                        }
 
                         // Update our timestamp to the latest record's timestamp + 1
                         const latestRecord = data.data.reduce((latest, current) => {
@@ -372,6 +395,132 @@
                 });
             };
 
+            // Function to play sound
+            const playSound = () => {
+                // Using Web Audio API to play a simple beep sound
+                const context = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = context.createOscillator();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(440, context.currentTime); // 440 Hz is the A4 note
+                oscillator.connect(context.destination);
+                oscillator.start();
+                oscillator.stop(context.currentTime + 0.2); // Play sound for 200ms
+            };
+
+            // Try to play sound on page load (may be blocked by browser)
+            playSound();
+
+            // Function to play sound with specific frequency and duration
+            const playTone = (frequency, duration) => {
+                return new Promise(resolve => {
+                    try {
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        const oscillator = audioContext.createOscillator();
+                        const gainNode = audioContext.createGain();
+
+                        oscillator.type = 'sine';
+                        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+
+                        // Add fade in/out to avoid clicks
+                        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+                        gainNode.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + 0.01);
+                        gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + duration);
+
+                        oscillator.connect(gainNode);
+                        gainNode.connect(audioContext.destination);
+
+                        oscillator.start(audioContext.currentTime);
+                        oscillator.stop(audioContext.currentTime + duration);
+
+                        setTimeout(() => {
+                            resolve();
+                            // Close the audio context after a delay to ensure the sound is fully played
+                            setTimeout(() => {
+                                if (audioContext.state !== 'closed') {
+                                    audioContext.close().catch(() => {});
+                                }
+                            }, 500);
+                        }, duration * 1000 + 50);
+                    } catch (error) {
+                        console.error('Error playing tone:', error);
+                        resolve(); // Resolve anyway to continue the sequence
+                    }
+                });
+            };
+
+            // Function to play a sequence of tones with pauses between them
+            const playToneSequence = async (tones) => {
+                for (const tone of tones) {
+                    await playTone(tone.freq, tone.duration);
+                    if (tone.pause) {
+                        await new Promise(resolve => setTimeout(resolve, tone.pause * 1000));
+                    }
+                }
+            };
+
+            // Try to initialize audio context on page load (will likely be suspended until user interaction)
+            let audioContextInitialized = false;
+            try {
+                const tempContext = new (window.AudioContext || window.webkitAudioContext)();
+                if (tempContext.state === 'running') {
+                    audioContextInitialized = true;
+                }
+                // Either suspend or close, depending on browser capability
+                if (tempContext.state !== 'closed') {
+                    if (tempContext.suspend && tempContext.state !== 'suspended') {
+                        tempContext.suspend().catch(() => {});
+                    } else if (tempContext.close) {
+                        tempContext.close().catch(() => {});
+                    }
+                }
+            } catch (e) {
+                console.log('Audio API not fully supported in this browser');
+            }
+
+            // Unlock audio on first user interaction
+            const unlockAudio = () => {
+                try {
+                    const tempContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const emptySource = tempContext.createBufferSource();
+                    emptySource.start();
+                    emptySource.stop();
+                    audioContextInitialized = true;
+                    console.log('Аудио разблокировано после взаимодействия');
+                } catch (e) {
+                    console.error('Не удалось разблокировать аудио:', e);
+                }
+
+                // Remove event listeners once audio is unlocked
+                document.removeEventListener('click', unlockAudio);
+                document.removeEventListener('touchstart', unlockAudio);
+                document.removeEventListener('keydown', unlockAudio);
+            };
+
+            // Add event listeners for unlocking audio
+            document.addEventListener('click', unlockAudio);
+            document.addEventListener('touchstart', unlockAudio);
+            document.addEventListener('keydown', unlockAudio);
+
+            // Play notification sound - три коротких сигнала и два длинных звуком ниже
+            const playNotificationSound = async () => {
+                if (!isSoundEnabled) return;
+
+                // Sequence: три коротких сигнала и два длинных звуком ниже
+                const sequence = [
+                    { freq: 880, duration: 0.1, pause: 0.1 },  // короткий сигнал 1
+                    { freq: 880, duration: 0.1, pause: 0.1 },  // короткий сигнал 2
+                    { freq: 880, duration: 0.1, pause: 0.2 },  // короткий сигнал 3
+                    { freq: 440, duration: 0.3, pause: 0.2 },  // длинный сигнал 1 (ниже)
+                    { freq: 440, duration: 0.3, pause: 0.1 }   // длинный сигнал 2 (ниже)
+                ];
+
+                try {
+                    await playToneSequence(sequence);
+                } catch (error) {
+                    console.error('Ошибка воспроизведения звуковой последовательности:', error);
+                }
+            };
+
             // Toggle polling
             togglePollingButton.addEventListener('click', function() {
                 isPolling = !isPolling;
@@ -412,6 +561,18 @@
                 if (isPolling && pollingTimer) {
                     clearTimeout(pollingTimer);
                     pollForNewRecords();
+                }
+            });
+
+            // Sound toggle
+            soundToggle.addEventListener('change', function() {
+                isSoundEnabled = this.checked;
+            });
+
+            // Test sound button
+            testSoundButton.addEventListener('click', function() {
+                if (isSoundEnabled) {
+                    playNotificationSound();
                 }
             });
 
