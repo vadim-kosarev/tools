@@ -1,0 +1,18 @@
+
+[common]
+# server_addr = "vkosarev.link"
+server_addr = "vkosarev.name"
+server_port = 7401
+token = "470720451211462921230901855180"
+
+[pi-ssh]
+type = "tcp"
+local_port = 22
+remote_port = 3122
+local_ip = "localhost"
+
+[pi-router]
+type = "tcp"
+local_port = 80
+remote_port = 3180
+local_ip = "192.168.0.1"
