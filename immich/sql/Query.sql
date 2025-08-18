@@ -24,21 +24,18 @@ WITH duplicates_to_delete AS (
 
 
 
---SELECT * FROM duplicates_to_delete
+SELECT * FROM duplicates_to_delete
 
-				 DELETE FROM assets            --#
-				 WHERE id IN (                 --#
-				     SELECT id      		       --#
-				     FROM duplicates_to_delete --#
+--				 DELETE FROM assets            --#
+--				 WHERE id IN (                 --#
+--				     SELECT id      		       --#
+--				     FROM duplicates_to_delete --#
 
 WHERE row_num > 0 
 AND "originalPath" LIKE '%%'
-AND row_num1 > 1
+--AND row_num1 > 1 -- row_num1 >1 == samePath
+AND "originalFileName" LIKE '%%'
 
 --				 );  	                         --#
 
 ORDER BY thumbhash, row_num, "originalPath";
-
-
-
-
