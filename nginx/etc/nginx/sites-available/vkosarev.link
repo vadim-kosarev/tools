@@ -1,0 +1,52 @@
+server {
+    listen 80 default_server;
+    server_name _;
+    return 301 https://$host:1443$request_uri;
+}
+
+server {
+    listen 1443 ssl;
+    listen [::]:1443 ssl;
+    
+    #        ssl_certificate      /tools/nginx/cert/vkosarev_link.crt;
+    ssl_certificate      /tools/nginx/cert/fullchain.pem;
+    ssl_certificate_key  /tools/nginx/cert/vkosarev.link_privatekey.key;
+    
+    root /tools/nginx/www/vkosarev.link;
+    
+    index index.html index.htm index.nginx-debian.html;
+    server_name vkosarev.name;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+
+server {
+    listen 7601 ssl;
+    listen [::]:7601 ssl;
+    
+    #        ssl_certificate      /tools/nginx/cert/vkosarev_link.crt;
+    ssl_certificate      /tools/nginx/cert/fullchain.pem;
+    ssl_certificate_key  /tools/nginx/cert/vkosarev.link_privatekey.key;
+
+    error_page 502 /502_custom_embedded.html;
+
+    location = /502_custom_embedded.html {
+        internal;
+        root /etc/nginx/www/
+    }    
+    
+    location / {
+        proxy_pass http://localhost:2283;
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Authorization,Content-Type' always;
+        
+        if ($request_method = OPTIONS) {
+            add_header Access-Control-Allow-Origin *;
+            add_header Access-Control-Allow-Methods 'GET, POST, OPTIONS';
+            add_header Access-Control-Allow-Headers 'Authorization,Content-Type';
+            return 204;
+        }
+    }
+}

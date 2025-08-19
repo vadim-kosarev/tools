@@ -1,0 +1,54 @@
+server {
+        listen 80 default_server;
+        server_name _;
+        return 301 https://$host:1443$request_uri;
+}
+
+server {
+
+        listen 1443 ssl;
+        listen [::]:1443 ssl;
+		
+        ssl_certificate      /tools/nginx/cert/certificate.crt;
+        ssl_certificate_key  /tools/nginx/cert/vkosarev.name_privatekey.key;
+		
+        root /tools/nginx/www/vkosarev.name;
+		
+        index index.html index.htm index.nginx-debian.html;
+        server_name vkosarev.name;
+        location / {
+                try_files $uri $uri/ =404;
+        }
+}
+
+
+server {
+
+        listen 7601 ssl;
+        listen [::]:7601 ssl;
+		
+        ssl_certificate      /tools/nginx/cert/certificate.crt;
+        ssl_certificate_key  /tools/nginx/cert/vkosarev.name_privatekey.key;
+		
+        location / {
+                proxy_pass http://localhost:2283;
+        }
+}
+
+
+server {
+
+        listen 7602 ssl;
+        listen [::]:7602 ssl;
+
+		
+        ssl_certificate      /tools/nginx/cert/certificate.crt;
+        ssl_certificate_key  /tools/nginx/cert/vkosarev.name_privatekey.key;
+		
+        location / {
+                proxy_pass http://localhost:3000;
+	        add_header 'Access-Control-Allow-Origin' '*' always;
+	        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+	        add_header 'Access-Control-Allow-Headers' 'Authorization,Content-Type' always;
+        }
+}
