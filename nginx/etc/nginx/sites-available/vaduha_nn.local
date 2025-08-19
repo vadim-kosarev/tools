@@ -1,3 +1,10 @@
+server_names_hash_bucket_size 128;
+log_format full_url '$remote_addr - $remote_user [$time_local] '
+                       '"$request_method $request_uri $server_protocol" '
+                       '$host '
+                       '$status $body_bytes_sent "$http_referer" '
+                       '"$http_user_agent"';
+
     server {
         listen 80;
         server_name vaduha_nn.local;
