@@ -148,7 +148,7 @@ async def process_post(request: Request):
 def processRequest(request: Request):
     log_info = format_request_log(request, None)
 
-    aFile = f'data/{datetime.now().strftime('%Y.%m.%d-%H.%M.%S')}-{request.query_params.get('phone')}.txt'
+    aFile = f"data/{datetime.now().strftime('%Y.%m.%d-%H.%M.%S')}-{request.query_params.get('phone')}.txt"
 
     if not os.path.exists('data'):
         os.makedirs('data')
