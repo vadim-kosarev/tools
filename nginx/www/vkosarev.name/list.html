@@ -28,16 +28,16 @@
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 20px;
-            table-layout: fixed;
+            //table-layout: fixed;
         }
         th, td {
             padding: 12px 15px;
             text-align: left;
             border-bottom: 1px solid #ddd;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 150px;
+            //overflow: hidden;
+            //text-overflow: ellipsis;
+            //max-width: 150px;
             position: relative;
         }
         th {
@@ -132,10 +132,10 @@
                         <th data-column="token">Token</th>
                         <th data-column="phone">Phone</th>
                         <th data-column="clientIP">Client IP</th>
-                        <th data-column="userAgent">User Agent</th>
                         <th data-column="referer">Referer</th>
                         <th data-column="status">Status</th>
                         <th data-column="created_at">Created At</th>
+                        <th data-column="userAgent">User Agent</th>
                     </tr>
                 </thead>
                 <tbody id="data-body">
@@ -326,10 +326,10 @@
                         { value: item.token || '-', key: 'token' },
                         { value: item.phone || '-', key: 'phone' },
                         { value: item.clientIP || '-', key: 'clientIP' },
-                        { value: item.userAgent || '-', key: 'userAgent' },
                         { value: item.referer || '-', key: 'referer' },
                         { value: item.status || '-', key: 'status' },
-                        { value: createdAt || '-', key: 'created_at' }
+                        { value: createdAt || '-', key: 'created_at' },
+                        { value: item.userAgent || '-', key: 'userAgent' }
                     ];
 
                     // Создаем каждую ячейку отдельно
