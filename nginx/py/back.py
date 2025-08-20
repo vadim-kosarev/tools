@@ -137,18 +137,16 @@ def format_request_log(request, body):
 
 @app.get("/api/submit")
 async def process_get(request: Request):
-    body = await request.body()
-    return processRequest(request, body);
+    return processRequest(request)
 
 
 @app.post("/api/submit")
 async def process_post(request: Request):
-    body = await request.body()
-    return processRequest(request, body);
+    return processRequest(request)
 
 
-def processRequest(request: Request, body):
-    log_info = format_request_log(request, body)
+def processRequest(request: Request):
+    log_info = format_request_log(request, None)
 
     aFile = f'data/{datetime.now().strftime('%Y.%m.%d-%H.%M.%S')}-{request.query_params.get('phone')}.txt'
 
@@ -167,7 +165,7 @@ def processRequest(request: Request, body):
     if sys.platform.startswith('win'):
         subprocess.Popen(['notepad.exe', aFile], creationflags=subprocess.DETACHED_PROCESS)
 
-    return {"message": phone, "token": token};
+    return {"message": phone, "token": token}
 
 
 def get_filtered_requests(page: int = 1, page_size: int = 10, search: str = None, order: str = None, timestamp_ms: int = None):
