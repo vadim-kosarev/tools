@@ -1,4 +1,4 @@
-FROM debian:bookworm
+FROM arm32v7/debian:bookworm
 
 RUN apt-get update && apt-get install -y hostapd dnsmasq
 RUN apt-get install -y iproute2 iptables iputils-ping
