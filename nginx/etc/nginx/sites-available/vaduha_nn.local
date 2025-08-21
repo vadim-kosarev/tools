@@ -9,7 +9,7 @@ log_format full_url '$remote_addr - [$time_local] - '
         listen 80 default_server;
         server_name _;
 
-        root /Tools/Nginx/www/vkosarev.name;
+        root /var/www/vkosarev.name;
         index 82.html;
         
         access_log /var/log/nginx/access-all.log full_url;
