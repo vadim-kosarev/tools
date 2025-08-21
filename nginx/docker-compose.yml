@@ -1,7 +1,6 @@
 services:
   wifi-ap:
     build: .
-    network_mode: host
     privileged: true
     environment:
       - AP_IFACE=wlan1
@@ -9,7 +8,3 @@ services:
       - PROFILE=${PROFILE}
     volumes:
       - ./py:/app
-#    ports:
-#      - "80:80"
-#      - "443:443"
-#      - "1501:1501"
