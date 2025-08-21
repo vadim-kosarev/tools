@@ -1,7 +1,7 @@
 FROM arm32v7/debian:bookworm
 
 RUN apt-get update
-RUN sed -i 's|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|g' /etc/apt/sources.list
+RUN sed -i 's|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|g' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get install -y hostapd dnsmasq
 RUN apt-get install -y iproute2 iptables iputils-ping
