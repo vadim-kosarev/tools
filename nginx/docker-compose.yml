@@ -1,0 +1,10 @@
+services:
+  wifi-ap:
+    build: .
+    network_mode: host
+    privileged: true
+    environment:
+      - AP_IFACE=wlan1
+      - AP_IP=192.168.50.1
+    volumes:
+      - ./py:/app

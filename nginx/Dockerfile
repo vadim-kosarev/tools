@@ -16,8 +16,6 @@ RUN pip3 install fastapi uvicorn
 COPY ./etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf
 COPY ./etc/dnsmasq.conf /etc/dnsmasq.conf
 COPY ./etc/nginx/nginx.conf /etc/nginx/nginx.conf
-COPY py /app
-
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
