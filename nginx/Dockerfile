@@ -1,4 +1,4 @@
-FROM arm32v7/debian:bookworm
+FROM debian:bookworm
 
 RUN apt update
 

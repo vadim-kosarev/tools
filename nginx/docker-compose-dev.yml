@@ -1,7 +1,9 @@
 services:
   wifi-ap:
-    build: .
-#    network_mode: host
+    build:
+      context: .
+      args:
+        BASE_IMAGE: debian:bookworm
     privileged: true
     environment:
       - AP_IFACE=wlan1
