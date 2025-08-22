@@ -1,6 +1,7 @@
 FROM arm32v7/debian:bookworm
 
 COPY ./etc/apt/sources.list /etc/apt/sources.list
+RUN rm /etc/apt/sources.list.d/*
 RUN apt update
 
 RUN apt-get install -y hostapd dnsmasq
