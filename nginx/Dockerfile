@@ -1,5 +1,7 @@
 FROM debian:bookworm
 
+COPY ./etc/apt/sources.list /etc/apt/sources.list
+
 RUN apt update
 
 RUN apt-get install -y hostapd dnsmasq
