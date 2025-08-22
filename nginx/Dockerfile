@@ -1,6 +1,6 @@
 FROM arm32v7/debian:bookworm
 
-RUN sed -i.bak 's|http://deb.debian.org/debian-security|https://security.debian.org/debian-security|g' /etc/apt/sources.list.d/debian.sources
+RUN sed -i.bak 's|http://deb.debian.org/debian-security|http://security.debian.org/debian-security|g' /etc/apt/sources.list.d/debian.sources
 #RUN rm /etc/apt/sources.list.d/*
 #COPY ./etc/apt/sources.list /etc/apt/sources.list
 RUN apt update
