@@ -1,9 +1,6 @@
 services:
   wifi-ap:
-    build:
-      context: .
-      args:
-        BASE_IMAGE: debian:bookworm
+    build: .
     privileged: true
     environment:
       - AP_IFACE=wlan1
@@ -11,6 +8,7 @@ services:
       - PROFILE=dev
     volumes:
       - ./py:/app
+      - ./var/www/vkosarev.name:/var/www/vkosarev.name
     ports:
       - "81:80"
       - "443:443"

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Позвонить</title>
+    <style>
+        .call-btn {
+            display: flex;
+            align-items: center;
+            height: auto;            /* was 100% */
+            padding: 0 20px;          /* horizontal padding only */
+            background: #28a745;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            text-decoration: none;
+            border-radius: 6px;
+            border: 2px solid #28a745;
+            transition: .2s;
+        }
+
+        /* Added to size/align the SVG icon */
+        .call-btn svg {
+            width: 24px;
+            height: 24px;
+            display: block;
+        }
+
+        .call-btn:hover,
+        .call-btn:focus {
+            background: #218838;
+            border-color: #218838;
+        }
+
+        /* Added layout styles */
+        .call-layout {
+            display: flex;
+            align-items: stretch;    /* was flex-start */
+            gap: 20px;
+            max-width: 600px;
+        }
+
+        .call-text {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .call-text .near {
+            display: block;
+            margin: 0 0 8px;
+            font-size: 14px;
+            line-height: 1.2;
+        }
+
+        .call-text .service_name {
+            display: block;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+    </style>
+</head>
+<body>
+<!-- Replaced separate p + h1 (with anchor inside) by a flex wrapper -->
+<div class="call-layout">
+    <a href="tel:+79775341900" class="call-btn" aria-label="Позвонить +7 977 534 1900"
+       alt="Позвонить +7 977 534 1900">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" focusable="false">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.86 19.86 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.81.37 1.6.72 2.34a2 2 0 0 1-.45 2.11L8.13 9.44a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.74.35 1.53.6 2.34.72A2 2 0 0 1 22 16.92z"/>
+        </svg>
+    </a>
+    <div class="call-text">
+        <span class="near">Мы где-то рядом!</span>
+        <span class="service_name">Fair Price Comfort+</span>
+    </div>
+</div>
+</body>
+</html>

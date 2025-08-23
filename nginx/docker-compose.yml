@@ -3,9 +3,11 @@ services:
     build: .
     privileged: true
     network_mode: host
+    pid: host
     environment:
       - AP_IFACE=wlan1
       - AP_IP=192.168.50.1
       - PROFILE=${PROFILE}
     volumes:
       - ./py:/app
+      - ./var/www/vkosarev.name:/var/www/vkosarev.name

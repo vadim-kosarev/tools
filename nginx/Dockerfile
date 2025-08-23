@@ -1,6 +1,6 @@
 FROM debian:bookworm
 
-COPY ./etc/apt/sources.list /etc/apt/sources.list
+#COPY ./etc/apt/sources.list /etc/apt/sources.list
 
 RUN apt update
 
