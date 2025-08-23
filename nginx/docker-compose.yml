@@ -2,6 +2,7 @@ services:
   wifi-ap:
     build: .
     privileged: true
+    network_mode: host
     environment:
       - AP_IFACE=wlan1
       - AP_IP=192.168.50.1
