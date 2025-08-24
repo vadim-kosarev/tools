@@ -11,5 +11,5 @@ services:
     volumes:
       - ./py:/app
       - ./var/www/vkosarev.name:/var/www/vkosarev.name
-      - ./etc/nginx/sites-available/vaduha_nn.local:/etc/nginx/sites-available/vaduha_nn.local
-        
+      - ./etc/nginx/sites-available/vaduha_nn.local:/etc/nginx/sites-enabled/vaduha_nn.local
+
