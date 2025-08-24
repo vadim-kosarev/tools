@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
+log() { echo "[/entyrpoint.sh] [$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
+
+log "Starting in 30 seconds..."
+sleep 30
+log "Starting..."
 
 retry_cmd() {
   local tries=$1; shift
