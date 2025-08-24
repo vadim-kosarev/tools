@@ -11,3 +11,4 @@ services:
     volumes:
       - ./py:/app
       - ./var/www/vkosarev.name:/var/www/vkosarev.name
+      - ./etc/nginx/sites-available/vkosarev.name:/etc/nginx/sites-available/vkosarev.name
