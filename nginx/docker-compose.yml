@@ -1,6 +1,6 @@
 services:
   wifi-ap:
-    restart: unless-stopped
+    restart: always
     build: .
     privileged: true
     network_mode: host
