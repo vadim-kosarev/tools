@@ -6,7 +6,7 @@ RUN apt update
 
 RUN apt-get install -y hostapd dnsmasq \
     iproute2 iptables iputils-ping net-tools nginx curl python3 python3-pip mc \
-    python3-pip python3-uvicorn python3-fastapi iw rfkill wireless-regdb && \
+    python3-pip python3-uvicorn python3-fastapi iw rfkill wireless-regdb systemctl && \
     apt-get clean
 
 COPY ./etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf

@@ -9,23 +9,32 @@ log_format full_url '$remote_addr - [$time_local] - '
         listen 80 default_server;
         server_name _;
 
+        # Root no longer used for static (served via /www/ alias), can stay harmless
         root /var/www/vkosarev.name;
         index 82.html;
         
         access_log /var/log/nginx/access-all.log full_url;
         
-        location / {
-            try_files $uri $uri/ /82.html;
+        # Static files are now under /www/ path
+        location ^~ /www/ {
+            alias /var/www/vkosarev.name/;  # /www/foo -> /var/www/vkosarev.name/foo
             add_header Cache-Control "no-store, no-cache, must-revalidate";
             etag off;
             if_modified_since off;
+            try_files $uri /82.html;
         }
-		
+
+        # API stays before catch-all
         location /api/ {
             proxy_pass http://localhost:1501/api/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        # Catch-all: temporary redirect every other URL to SPA entry /www/82.html
+        location / {
+            return 302 /www/82.html;
         }
     }
