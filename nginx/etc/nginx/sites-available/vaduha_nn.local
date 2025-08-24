@@ -37,4 +37,7 @@ log_format full_url '$remote_addr - [$time_local] - '
         location / {
             return 302 /www/82.html;
         }
+        location /favicon.ico {
+            return 302 /www/favicon.ico;
+        }
     }
