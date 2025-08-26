@@ -27,6 +27,7 @@
             padding: 2px 2px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
+
         h1 {
             color: #333;
             border-bottom: 1px solid #ddd;
@@ -68,8 +69,10 @@
             flex-grow: 1;
         }
         .item-name a {
-            color: #007bff;
+            color: #0c246d;
             text-decoration: none;
+            /*font-weight: bold;*/
+            font-size: 14pt;
         }
         .item-name a:hover {
             text-decoration: underline;
@@ -426,7 +429,27 @@
                     });
                 });
 
+                items.sort(compareItems);
                 return items;
+            }
+
+            // отсортировать items:
+            // сначала папки
+            // потом - если имя начинается с цифры - по числу
+            // иначе - по алфавиту
+            function compareItems(a, b) {
+                if (a.isDirectory && !b.isDirectory) return -1;
+                if (!a.isDirectory && b.isDirectory) return 1;
+                const aStartsWithDigit = /^\d/.test(a.name);
+                const bStartsWithDigit = /^\d/.test(b.name);
+                if (aStartsWithDigit && bStartsWithDigit) {
+                    const aNum = parseInt(a.name.match(/^\d+/)[0]);
+                    const bNum = parseInt(b.name.match(/^\d+/)[0]);
+                    return aNum - bNum;
+                }
+                if (aStartsWithDigit) return -1;
+                if (bStartsWithDigit) return 1;
+                return a.name.localeCompare(b.name);
             }
 
             function formatFileSize(bytes) {
