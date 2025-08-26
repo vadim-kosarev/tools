@@ -233,7 +233,7 @@
 </head>
 <body>
     <div id="content">
-        <h1>Media Browser</h1>
+        <!-- <h1>Media Browser</h1> -->
         <div id="breadcrumb" class="breadcrumb">
             <span>Loading...</span>
         </div>
@@ -391,7 +391,6 @@
                     }
 
                     name = decodeURIComponent(name);
-
                     if (name.startsWith('_')) {
                         return;
                     }
@@ -504,7 +503,7 @@
                     html += `
                         <div class="item">
                             <a href="#" data-path="${getParentPath(currentPath)}">
-                                <img src="./images/icons/folder.png" class="item-thumbnail" alt="Parent directory">
+                                <img src="./images/icons/folder-up.png" class="item-thumbnail" alt="Parent directory">
                             </a>
                             <div class="item-name">
                                 <a href="#" data-path="${getParentPath(currentPath)}">..</a>
