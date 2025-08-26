@@ -278,7 +278,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const baseUrl = '';
-            let currentPath = '/video/dst/';
+            let currentPath = '/video/';
             const mediaPlayerContainer = document.getElementById('media-player-container');
             const mediaPlayer = document.getElementById('media-player');
             const playerTitle = document.getElementById('player-title');
@@ -298,10 +298,18 @@
             let currentPlaylistIndex = -1;
             let playedIndices = [];
 
+            // Check for path in URL hash
+            if (window.location.hash) {
+                currentPath = window.location.hash.substring(1);
+            }
+
             loadDirectory(currentPath);
 
             function loadDirectory(path) {
                 document.getElementById('listing').innerHTML = '<div class="loading">Loading content...</div>';
+
+                // Update URL hash with current path
+                window.location.hash = path;
 
                 fetch(baseUrl + path)
                     .then(response => {
@@ -330,7 +338,7 @@
 
             function updateBreadcrumb(path) {
                 const parts = path.split('/').filter(part => part !== '');
-                let breadcrumbHtml = '<a href="#" data-path="/">Root</a>';
+                let breadcrumbHtml = '';
                 let currentPath = '/';
 
                 parts.forEach((part, index) => {
@@ -429,20 +437,19 @@
                 }
 
                 const nameWithoutExt = getNameWithoutExtension(itemName);
-                const videoBasePath = '/video/';
-                let relativePath = '';
 
-                if (currentPath.startsWith(videoBasePath)) {
-                    relativePath = currentPath.substring(videoBasePath.length);
+                // Get path from URL hash without the leading #
+                let path = window.location.hash.substring(1);
+
+                // For video and image files, construct the thumbnail path
+                if (path.startsWith('/video/')) {
+                    // Insert _thumbs after /video/ in the path
+                    const thumbPath = '/video/_thumbs/' + path.substring('/video/'.length) + nameWithoutExt + '.jpg';
+                    return thumbPath;
                 } else {
-                    relativePath = currentPath;
-                    if (relativePath.startsWith('/')) {
-                        relativePath = relativePath.substring(1);
-                    }
+                    // Fallback for non-video paths
+                    return './images/icons/media.png';
                 }
-
-                const thumbPath = '/video/_thumbs/' + relativePath + nameWithoutExt + '.jpg';
-                return thumbPath;
             }
 
             function checkThumbnailExists(thumbPath, fallbackPath, callback) {
@@ -467,7 +474,8 @@
             function renderItems(items, currentPath) {
                 let html = '';
 
-                if (currentPath !== '/') {
+                // Only show parent directory link if not in the root video directory
+                if (currentPath !== '/video/' && currentPath !== '/') {
                     html += `
                         <div class="item">
                             <a href="#" data-path="${getParentPath(currentPath)}">
@@ -510,7 +518,6 @@
 
                     const fallbackIcon = isVideo || isImage ? './images/icons/media.png' :
                                          isAudio ? './images/icons/audio.png' : './images/icons/media.png';
-                    console.log("nameWithoutExt: " + nameWithoutExt);
 
                     html += `
                         <div class="item" data-media="${isVideo || isAudio}">
@@ -606,7 +613,6 @@
                         //name: link.textContent
                         name: link.getAttribute('data-text')
                     });
-                    console.log("link: " + link.textContent);
                 });
 
                 updatePlaylistUI();
