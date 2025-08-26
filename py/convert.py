@@ -54,13 +54,39 @@ def convert_file(src, dst, cut_first=None):
         cmd = ["ffmpeg"] + base_options + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", dst]
         mode = "копирование"
     else:
-        # полное перекодирование
-        cmd = ["ffmpeg"] + base_options + [
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
-            dst
-        ]
-        mode = "перекодирование"
+        # полное перекодирование с использованием GPU NVIDIA
+        try:
+            # Проверяем доступность NVIDIA GPU через ffmpeg
+            check_gpu = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True, text=True
+            )
+
+            if "h264_nvenc" in check_gpu.stdout:
+                # Используем NVIDIA GPU для кодирования
+                cmd = ["ffmpeg"] + base_options + [
+                    "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-profile:v", "high",
+                    "-b:v", "5M", "-maxrate:v", "10M", "-bufsize:v", "10M",
+                    "-c:a", "aac", "-b:a", "128k",
+                    dst
+                ]
+                mode = "перекодирование (GPU NVIDIA)"
+            else:
+                # Если GPU недоступен, используем CPU
+                cmd = ["ffmpeg"] + base_options + [
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    dst
+                ]
+                mode = "перекодирование (CPU)"
+        except Exception:
+            # В случае ошибки используем CPU
+            cmd = ["ffmpeg"] + base_options + [
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                dst
+            ]
+            mode = "перекодирование (CPU)"
 
     cut_info = f" (обрезка {cut_first} сек)" if cut_first else ""
     print(f">>> {mode}{cut_info}: {src} -> {dst}")
