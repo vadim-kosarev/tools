@@ -49,80 +49,22 @@ def convert_file(src, dst, cut_first=None):
 
     base_options.extend(["-i", src])
 
-    # Проверяем, можно ли просто скопировать видео без перекодирования
     if vcodec == "h264" and acodec in ("aac", "mp3"):
         # контейнерный ремап без перекодирования
         cmd = ["ffmpeg"] + base_options + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", dst]
         mode = "копирование"
-
-        print(f">>> {mode}{' (обрезка ' + str(cut_first) + ' сек)' if cut_first else ''}: {src} -> {dst}")
-        subprocess.run(cmd)
-        return
-
-    # Проверяем поддержку NVIDIA GPU для перекодирования
-    use_gpu = False
-    try:
-        # Проверяем наличие кодека h264_nvenc
-        check_gpu = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, text=True
-        )
-
-        if "h264_nvenc" in check_gpu.stdout:
-            # Попробуем закодировать маленький тестовый фрагмент для проверки совместимости
-            test_cmd = [
-                "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=256x256:d=1",
-                "-c:v", "h264_nvenc", "-preset", "fast", "-profile:v", "main",
-                "-f", "null", "-"
-            ]
-            test_process = subprocess.run(test_cmd, capture_output=True, text=True)
-            use_gpu = test_process.returncode == 0
-
-            if not use_gpu:
-                print("ВНИМАНИЕ: NVIDIA GPU обнаружен, но тест кодирования не прошел. Используем CPU.")
-    except Exception as e:
-        print(f"ВНИМАНИЕ: Ошибка при проверке GPU: {e}. Используем CPU.")
-        use_gpu = False
-
-    # Перекодирование с GPU или CPU
-    if use_gpu:
-        # Используем более совместимые настройки для NVENC
-        cmd = ["ffmpeg"] + base_options + [
-            "-c:v", "h264_nvenc",
-            "-preset", "fast",  # вместо p4, который может быть несовместим
-            "-profile:v", "main",  # более совместимый профиль
-            "-b:v", "5M",
-            "-c:a", "aac", "-b:a", "128k",
-            dst
-        ]
-        mode = "перекодирование (GPU NVIDIA)"
     else:
-        # Используем CPU
+        # полное перекодирование
         cmd = ["ffmpeg"] + base_options + [
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             dst
         ]
-        mode = "перекодирование (CPU)"
+        mode = "перекодирование"
 
-    # Запускаем процесс конвертации
-    print(f">>> {mode}{' (обрезка ' + str(cut_first) + ' сек)' if cut_first else ''}: {src} -> {dst}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    # Если процесс с GPU завершился с ошибкой, повторяем на CPU
-    if use_gpu and result.returncode != 0:
-        print(f"ВНИМАНИЕ: Ошибка при использовании GPU. Код ошибки: {result.returncode}")
-        print(f"Сообщение: {result.stderr}")
-        print("Повторная попытка конвертации с использованием CPU...")
-
-        cmd = ["ffmpeg"] + base_options + [
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
-            dst
-        ]
-        mode = "перекодирование (CPU)"
-        print(f">>> {mode}{' (обрезка ' + str(cut_first) + ' сек)' if cut_first else ''}: {src} -> {dst}")
-        subprocess.run(cmd)
+    cut_info = f" (обрезка {cut_first} сек)" if cut_first else ""
+    print(f">>> {mode}{cut_info}: {src} -> {dst}")
+    subprocess.run(cmd)
 
 
 def convert_recursive(src_dir, dst_dir, cut_first=None, extensions=None):
