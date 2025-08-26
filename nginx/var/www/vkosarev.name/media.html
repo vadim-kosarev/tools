@@ -37,7 +37,7 @@
         }
         .item {
             display: flex;
-            padding: 10px;
+            padding: 15px; /* Увеличен отступ для более просторного вида */
             border-bottom: 1px solid #eee;
             align-items: center;
         }
@@ -59,10 +59,9 @@
         .item-name a:hover {
             text-decoration: underline;
         }
+        /* Скрываем дату файла */
         .item-date {
-            color: #666;
-            width: 200px;
-            text-align: right;
+            display: none;
         }
         .item-size {
             color: #666;
@@ -74,6 +73,13 @@
         }
         .file-icon {
             color: #6c757d;
+        }
+        /* Стили для thumbnails */
+        .item-thumbnail {
+            width: 128px;  /* Увеличено в 4 раза с 32px */
+            height: 128px; /* Увеличено в 4 раза с 32px */
+            margin-right: 15px; /* Увеличен отступ для лучшего вида */
+            object-fit: contain;
         }
         .loading {
             text-align: center;
@@ -391,14 +397,20 @@
                     }
 
                     const href = link.getAttribute('href');
-                    const isDirectory = href.endsWith('/');
                     const name = decodeURIComponent(link.textContent);
+
+                    // Фильтруем элементы, начинающиеся с "_"
+                    if (name.startsWith('_')) {
+                        return;
+                    }
+
+                    const isDirectory = href.endsWith('/');
 
                     // Get date and size from the text following the link
                     const parentText = link.parentNode.textContent;
                     const textAfterLink = parentText.substring(parentText.indexOf(link.textContent) + link.textContent.length);
 
-                    // Extract date and size using regex
+                    // Extract date and size using regex (дата нам все равно нужна для сортировки)
                     const dateMatch = textAfterLink.match(/(\d{2}-[A-Za-z]{3}-\d{4} \d{2}:\d{2})/);
                     const date = dateMatch ? dateMatch[1] : '';
 
@@ -432,6 +444,91 @@
                 return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
             }
 
+            // Function to get file name without extension
+            function getNameWithoutExtension(filename) {
+                // Если это директория, удаляем '/' в конце
+                if (filename.endsWith('/')) {
+                    filename = filename.slice(0, -1);
+                }
+
+                // Получаем только имя файла без пути
+                const baseName = filename.split('/').pop();
+
+                // Удаляем расширение файла
+                const dotIndex = baseName.lastIndexOf('.');
+                if (dotIndex !== -1) {
+                    return baseName.substring(0, dotIndex);
+                }
+                return baseName;
+            }
+
+            // Function to get thumbnail path
+            function getThumbnailPath(itemName, itemHref, itemType) {
+                // Если это стандартная иконка, возвращаем её путь
+                if (itemType === 'directory') {
+                    return './images/icons/folder.png';
+                } else if (itemType === 'audio') {
+                    return './images/icons/audio.png';
+                } else if (itemType !== 'video' && itemType !== 'image') {
+                    return './images/icons/media.png';
+                }
+
+                // Удаляем расширение из имени файла и получаем название без расширения
+                const nameWithoutExt = getNameWithoutExtension(itemName);
+
+                // Извлекаем текущий путь относительно /video/
+                // Текущий путь имеет вид '/video/dst/' или подобный
+                const videoBasePath = '/video/';
+                let relativePath = '';
+
+                // Проверяем, начинается ли currentPath с '/video/'
+                if (currentPath.startsWith(videoBasePath)) {
+                    relativePath = currentPath.substring(videoBasePath.length);
+                } else {
+                    // Если текущий путь не начинается с '/video/', используем его как есть
+                    relativePath = currentPath;
+                    // Убираем ведущий слеш, если он есть
+                    if (relativePath.startsWith('/')) {
+                        relativePath = relativePath.substring(1);
+                    }
+                }
+
+                // Формируем путь к thumbnail с учетом новой структуры:
+                // /video/_thumbs/[относительный_путь]/[имя_файла_без_расширения].jpg
+                const thumbPath = '/video/_thumbs/' + relativePath + nameWithoutExt + '.jpg';
+
+                console.log("Generated thumbnail path:", thumbPath);
+                return thumbPath;
+            }
+
+            // Function to check if thumbnail exists
+            function checkThumbnailExists(thumbPath, fallbackPath, callback) {
+                // Выводим в консоль URL проверяемого thumbnail
+                console.log("Checking thumbnail: " + thumbPath);
+
+                // Если это путь к иконке по умолчанию, сразу возвращаем его
+                if (thumbPath.startsWith('./images/icons/')) {
+                    callback(thumbPath);
+                    return;
+                }
+
+                // Проверяем существование файла thumbnail
+                fetch(thumbPath, { method: 'HEAD' })
+                    .then(response => {
+                        if (response.ok) {
+                            console.log("Thumbnail found: " + thumbPath);
+                            callback(thumbPath); // Thumbnail существует
+                        } else {
+                            console.log("Thumbnail not found: " + thumbPath + ", using fallback: " + fallbackPath);
+                            callback(fallbackPath); // Используем fallback иконку
+                        }
+                    })
+                    .catch(() => {
+                        console.log("Error checking thumbnail: " + thumbPath + ", using fallback: " + fallbackPath);
+                        callback(fallbackPath); // При ошибке используем fallback иконку
+                    });
+            }
+
             // Function to render items to the page
             function renderItems(items, currentPath) {
                 let html = '';
@@ -440,7 +537,7 @@
                 if (currentPath !== '/') {
                     html += `
                         <div class="item">
-                            <div class="item-icon folder-icon">📁</div>
+                            <img src="./images/icons/folder.png" class="item-thumbnail" alt="Parent directory">
                             <div class="item-name">
                                 <a href="#" data-path="${getParentPath(currentPath)}">..</a>
                             </div>
@@ -452,11 +549,14 @@
 
                 // First show directories
                 items.filter(item => item.isDirectory).forEach(item => {
+                    const nameWithoutExt = getNameWithoutExtension(item.name);
+                    const thumbnailPath = getThumbnailPath(item.name, item.href, 'directory');
+
                     html += `
                         <div class="item">
-                            <div class="item-icon folder-icon">📁</div>
+                            <img src="${thumbnailPath}" class="item-thumbnail" alt="Folder">
                             <div class="item-name">
-                                <a href="#" data-path="${currentPath + item.href}">${item.name}</a>
+                                <a href="#" data-path="${currentPath + item.href}">${nameWithoutExt}</a>
                             </div>
                             <div class="item-date">${item.date}</div>
                             <div class="item-size">-</div>
@@ -475,19 +575,22 @@
                     const isAudio = /\.(mp3|wav|ogg|flac|aac)$/i.test(item.name);
                     const isImage = /\.(jpg|jpeg|png|gif|bmp|svg|webp)$/i.test(item.name);
 
-                    let fileIcon = '📄';
-                    if (isVideo) fileIcon = '🎬';
-                    if (isAudio) fileIcon = '🎵';
-                    if (isImage) fileIcon = '🖼️';
+                    const fileType = isVideo ? 'video' : (isAudio ? 'audio' : (isImage ? 'image' : 'other'));
+                    const thumbnailPath = getThumbnailPath(item.name, item.href, fileType);
+                    const nameWithoutExt = getNameWithoutExtension(item.name);
+
+                    const fallbackIcon = isVideo || isImage ? './images/icons/media.png' :
+                                         isAudio ? './images/icons/audio.png' : './images/icons/media.png';
 
                     html += `
                         <div class="item" data-media="${isVideo || isAudio}">
-                            <div class="item-icon file-icon">${fileIcon}</div>
+                            <img src="${thumbnailPath}" class="item-thumbnail" alt="Media"
+                                 onerror="this.onerror=null; this.src='${fallbackIcon}';">
                             <div class="item-name">
                                 <a href="${baseUrl + currentPath + item.href}"
                                    class="media-link"
                                    data-src="${baseUrl + currentPath + item.href}"
-                                   data-type="${isVideo ? 'video' : (isAudio ? 'audio' : 'image')}">${item.name}</a>
+                                   data-type="${fileType}">${nameWithoutExt}</a>
                             </div>
                             <div class="item-date">${item.date}</div>
                             <div class="item-size">${item.size}</div>
@@ -497,11 +600,14 @@
 
                 // Create other files list
                 otherFiles.forEach(item => {
+                    const nameWithoutExt = getNameWithoutExtension(item.name);
+                    const thumbnailPath = './images/icons/media.png';
+
                     html += `
                         <div class="item">
-                            <div class="item-icon file-icon">📄</div>
+                            <img src="${thumbnailPath}" class="item-thumbnail" alt="File">
                             <div class="item-name">
-                                <a href="${baseUrl + currentPath + item.href}" target="_blank">${item.name}</a>
+                                <a href="${baseUrl + currentPath + item.href}" target="_blank">${nameWithoutExt}</a>
                             </div>
                             <div class="item-date">${item.date}</div>
                             <div class="item-size">${item.size}</div>
@@ -671,8 +777,8 @@
                     // Show media player container
                     mediaPlayerContainer.style.display = 'flex';
 
-                    // Auto enter expanded mode
-                    toggleExpandedMode(true);
+                    // Removed auto-expanded mode activation - no longer using:
+                    // toggleExpandedMode(true);
 
                     // Update playlist UI
                     updatePlaylistUI();
