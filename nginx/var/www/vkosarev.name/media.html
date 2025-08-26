@@ -370,13 +370,27 @@
                 const items = [];
 
                 links.forEach(link => {
-
                     if (link.textContent === '../' && items.length === 0) {
                         return;
                     }
 
                     const href = link.getAttribute('href');
-                    const name = decodeURIComponent(link.textContent);
+
+                    // Extract name from href instead of textContent to prevent truncation
+                    let name;
+                    if (href.endsWith('/')) {
+                        // For directories, remove the trailing slash
+                        name = href.slice(0, -1);
+                    } else {
+                        name = href;
+                    }
+
+                    // Get the filename part (after the last slash)
+                    if (name.includes('/')) {
+                        name = name.substring(name.lastIndexOf('/') + 1);
+                    }
+
+                    name = decodeURIComponent(name);
 
                     if (name.startsWith('_')) {
                         return;

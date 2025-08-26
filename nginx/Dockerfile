@@ -15,9 +15,7 @@ RUN mkdir -p /usr/lib/locale && \
     ln -sf /usr/lib/locale/C.UTF-8 /usr/lib/locale/en_US.utf8 && \
     ln -sf /usr/lib/locale/C.UTF-8 /usr/lib/locale/ru_RU.utf8
 
-#RUN echo "Проверка локалей:" && \
-#    python3 -c "import sys; print(f'Кодировка Python: {sys.stdout.encoding}')" && \
-#    ls -l /usr/lib/locale/ \
+#RUN apt install libnginx-mod-http-fancyindex
 
 COPY ./etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf
 COPY ./etc/dnsmasq.conf /etc/dnsmasq.conf
