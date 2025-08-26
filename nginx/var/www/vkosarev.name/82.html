@@ -66,13 +66,13 @@
 
         ul {
             list-style-type: disc; /* стандартные маркеры */
-            padding-left: 20px; /* базовый отступ */
+            padding-left: 10px; /* базовый отступ */
             margin: 0;
         }
 
         ul ul { /* вложенные списки */
             list-style-type: circle; /* чуть другой маркер */
-            margin-left: 20px; /* горизонтальный отступ */
+            margin-left: 10px; /* горизонтальный отступ */
         }
 
         li {
@@ -80,7 +80,7 @@
         }
 
         li li {
-            margin-left: 24px 0;
+            margin-left: 14px 0;
         }
 
 
@@ -244,18 +244,22 @@
 
 <div class="panel">
     <div class="call-layout">
+        <div class="call-text">
+            <span class="service_name" style="white-space:nowrap;">Comfort+</span>
+        </div>
         <a href="tel:+79775341900" class="call-btn" aria-label="Позвонить +7 977 534 1900"
            alt="Позвонить +7 977 534 1900">
+            <div>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                  aria-hidden="true" focusable="false">
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.86 19.86 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.81.37 1.6.72 2.34a2 2 0 0 1-.45 2.11L8.13 9.44a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.74.35 1.53.6 2.34.72A2 2 0 0 1 22 16.92z"/>
             </svg>
+            </div>
+            <div style="padding-left: 5pt">
+            Позвонить
+            </div>
         </a>
-        <div class="call-text">
-            <span class="near">Мы где-то рядом!</span>
-            <span class="service_name" style="white-space:nowrap;">Comfort+</span>
-        </div>
     </div>
     <p>Оплата наличными <span class="comment">(безналичная — только если по дороге найдем интернет)</span>
     <ul>
@@ -294,6 +298,13 @@
         <li><b>г.Дзержинск</b> — <span class="strong2">3500 р.</span></li>
     </ul>
     <p>Haval Jolion, детское кресло, бустер, багажник, кондиционер — всё включено</p>
+    <a href="/www/media.html"
+       class="call-btn"
+       aria-label="Развлечения"
+       alt="Развлечения">
+        Мультики для детей -->
+    </a>
+
 </div>
 
 <div style="flex: 1;"></div>
