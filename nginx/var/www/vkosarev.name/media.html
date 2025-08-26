@@ -5,14 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Media Browser</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0 1px;
-            padding: 1px 1px;
-            background-color: #f5f5f5;
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
         }
+
+        body {
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }
+
         #content {
-            background-color: white;
+            background-color: rgba(255, 255, 255, 0.8);
             border-radius: 5px;
             padding: 2px 2px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
@@ -831,6 +841,32 @@
                 }
             });
         });
+
+        // Set random background image based on time of day
+        function setRandomBackgroundImage() {
+            const now = new Date();
+            const hours = now.getHours();
+
+            // Determine time of day
+            let timeOfDay;
+            if (hours >= 20 || hours < 3) {
+                timeOfDay = 'night';
+            } else if (hours >= 3 && hours < 16) {
+                timeOfDay = 'day';
+            } else { // 16-20
+                timeOfDay = 'evening';
+            }
+
+            // Generate random number between 1 and 3
+            const randomNumber = Math.floor(Math.random() * 3) + 1;
+
+            // Set background image
+            const backgroundImage = `images/${timeOfDay}-${randomNumber}.jpg`;
+            document.body.style.backgroundImage = `url('${backgroundImage}')`;
+        }
+
+        // Execute when page loads
+        window.addEventListener('DOMContentLoaded', setRandomBackgroundImage);
     </script>
 </body>
 </html>
