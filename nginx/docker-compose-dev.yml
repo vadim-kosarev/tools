@@ -1,15 +1,34 @@
 services:
   wifi-ap:
     build: .
+    restart: always
     privileged: true
+#    network_mode: host
+#    pid: host
     environment:
       - AP_IFACE=wlan1
       - AP_IP=192.168.50.1
       - PROFILE=dev
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - PYTHONIOENCODING=UTF-8
     volumes:
       - ./py:/app
       - ./var/www/vkosarev.name:/var/www/vkosarev.name
+      - ./etc/nginx/sites-available/vaduha_nn.local.conf:/etc/nginx/sites-enabled/vaduha_nn.local.conf
+      - C:/data/video:/data/video
     ports:
       - "81:80"
       - "443:443"
       - "1501:1501"
+
+  h5ai:
+    image: jellyfina/h5ai:lite
+    container_name: h5ai
+    ports:
+      - "1502:80"
+    environment:
+      LANG: ru_RU.UTF-8
+      TZ: Europe/Moscow
+    volumes:
+      - C:/data/video/dst:/www

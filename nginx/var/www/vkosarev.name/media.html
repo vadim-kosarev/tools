@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Browser</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        #content {
+            background-color: white;
+            border-radius: 5px;
+            padding: 20px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .breadcrumb {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .breadcrumb a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .item {
+            display: flex;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            align-items: center;
+        }
+        .item:hover {
+            background-color: #f8f9fa;
+        }
+        .item-icon {
+            margin-right: 10px;
+            width: 24px;
+            height: 24px;
+        }
+        .item-name {
+            flex-grow: 1;
+        }
+        .item-name a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .item-name a:hover {
+            text-decoration: underline;
+        }
+        .item-date {
+            color: #666;
+            width: 200px;
+            text-align: right;
+        }
+        .item-size {
+            color: #666;
+            width: 100px;
+            text-align: right;
+        }
+        .folder-icon {
+            color: #ffc107;
+        }
+        .file-icon {
+            color: #6c757d;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-style: italic;
+            color: #666;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        /* Media player styles */
+        #media-player-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #media-player-wrapper {
+            position: relative;
+            width: 80%;
+            max-width: 1000px;
+        }
+        #media-player {
+            width: 100%;
+            max-height: 80vh;
+            outline: none;
+        }
+        #player-controls {
+            width: 80%;
+            max-width: 1000px;
+            margin-top: 20px;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #player-title {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: white;
+            max-width: 80%;
+            text-align: center;
+            word-break: break-word;
+        }
+        #player-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            outline: none;
+        }
+        #playlist-container {
+            width: 80%;
+            max-width: 1000px;
+            max-height: 150px;
+            overflow-y: auto;
+            margin-top: 20px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        }
+        .playlist-item {
+            padding: 10px;
+            color: white;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .playlist-item:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        .playlist-item.active {
+            background-color: rgba(0, 123, 255, 0.5);
+        }
+        /* Player icon buttons styles */
+        .player-btn {
+            background-color: rgba(34, 34, 34, 0.7);
+            border: none;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            margin: 0 5px;
+        }
+        .player-btn:hover {
+            background-color: rgba(60, 60, 60, 0.9);
+        }
+        .player-btn.active {
+            background-color: rgba(65, 105, 225, 0.8); /* Royal Blue for active state */
+        }
+        .player-btn img {
+            width: 24px;
+            height: 24px;
+            filter: invert(1); /* Make black icon white */
+        }
+        #player-next-prev {
+            display: flex;
+            gap: 5px;
+        }
+        /* Fullscreen styles */
+        #media-player:-webkit-full-screen {
+            width: 100%;
+            height: 100%;
+            max-height: none;
+        }
+        #media-player:fullscreen {
+            width: 100%;
+            height: 100%;
+            max-height: none;
+        }
+        #player-fullscreen {
+            margin-left: 10px;
+        }
+        /* When player container is in expanded mode (not real fullscreen but fills window) */
+        .expanded-player #media-player-wrapper {
+            width: 95%;
+            height: 90vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .expanded-player #media-player {
+            width: 100%;
+            height: 100%;
+            max-height: none;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+    <div id="content">
+        <h1>Media Browser</h1>
+        <div id="breadcrumb" class="breadcrumb">
+            <span>Loading...</span>
+        </div>
+        <div id="listing">
+            <div class="loading">Loading content...</div>
+        </div>
+    </div>
+
+    <!-- Media Player -->
+    <div id="media-player-container">
+        <button id="player-close">×</button>
+        <div id="player-title"></div>
+        <div id="media-player-wrapper">
+            <video id="media-player" controls></video>
+        </div>
+        <div id="player-controls">
+            <div id="player-next-prev">
+                <button id="player-prev" class="player-btn" title="Previous">
+                    <img src="./images/icons/4.png" alt="Previous">
+                </button>
+                <button id="player-play" class="player-btn" title="Play">
+                    <img src="./images/icons/1.png" alt="Play">
+                </button>
+                <button id="player-pause" class="player-btn" title="Pause">
+                    <img src="./images/icons/2.png" alt="Pause">
+                </button>
+                <button id="player-stop" class="player-btn" title="Stop">
+                    <img src="./images/icons/7.png" alt="Stop">
+                </button>
+                <button id="player-next" class="player-btn" title="Next">
+                    <img src="./images/icons/3.png" alt="Next">
+                </button>
+                <button id="player-shuffle" class="player-btn active" title="Random Order">
+                    <img src="./images/icons/21.png" alt="Shuffle">
+                </button>
+                <button id="player-fullscreen" class="player-btn" title="Fullscreen">
+                    <img src="./images/icons/13.png" alt="Fullscreen">
+                </button>
+            </div>
+            <div id="player-info"></div>
+        </div>
+        <div id="playlist-container"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Base URL for requests
+            //const baseUrl = 'http://localhost:81';
+            const baseUrl = '';
+            // Current path - start at /video/dst/
+            let currentPath = '/video/dst/';
+            // Media player elements
+            const mediaPlayerContainer = document.getElementById('media-player-container');
+            const mediaPlayer = document.getElementById('media-player');
+            const playerTitle = document.getElementById('player-title');
+            const playerClose = document.getElementById('player-close');
+            const playerNext = document.getElementById('player-next');
+            const playerPrev = document.getElementById('player-prev');
+            const playerPlay = document.getElementById('player-play');
+            const playerPause = document.getElementById('player-pause');
+            const playerStop = document.getElementById('player-stop');
+            const playlistContainer = document.getElementById('playlist-container');
+            const playerFullscreen = document.getElementById('player-fullscreen');
+            const playerShuffle = document.getElementById('player-shuffle');
+
+            // Flag to track if we're in expanded mode
+            let isExpanded = false;
+
+            // Shuffle mode - true by default
+            let isShuffleMode = true;
+
+            // Media playlist
+            let currentPlaylist = [];
+            let currentPlaylistIndex = -1;
+
+            // Used for shuffle mode
+            let playedIndices = [];
+
+            // Initial load
+            loadDirectory(currentPath);
+
+            // Function to load directory contents
+            function loadDirectory(path) {
+                // Update UI to show loading state
+                document.getElementById('listing').innerHTML = '<div class="loading">Loading content...</div>';
+
+                // Make AJAX request
+                fetch(baseUrl + path)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Network response was not ok');
+                        }
+                        return response.text();
+                    })
+                    .then(html => {
+                        // Parse the HTML response
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+
+                        // Extract directory information
+                        const title = doc.querySelector('h1').textContent;
+
+                        // Update breadcrumb
+                        updateBreadcrumb(path);
+
+                        // Extract links (directories and files)
+                        const links = Array.from(doc.querySelectorAll('pre a'));
+
+                        // Process links and extract information
+                        const items = processLinks(links);
+
+                        // Render items to page
+                        renderItems(items, path);
+                    })
+                    .catch(error => {
+                        console.error('Error loading directory:', error);
+                        document.getElementById('listing').innerHTML = `
+                            <div class="error">
+                                Error loading directory: ${error.message}
+                            </div>
+                        `;
+                    });
+            }
+
+            // Function to update breadcrumb navigation
+            function updateBreadcrumb(path) {
+                const parts = path.split('/').filter(part => part !== '');
+                let breadcrumbHtml = '<a href="#" data-path="/">Root</a>';
+                let currentPath = '/';
+
+                parts.forEach((part, index) => {
+                    currentPath += part + '/';
+                    breadcrumbHtml += ' / ';
+
+                    // If it's the last item, don't make it clickable
+                    if (index === parts.length - 1) {
+                        breadcrumbHtml += `<span>${decodeURIComponent(part)}</span>`;
+                    } else {
+                        breadcrumbHtml += `<a href="#" data-path="${currentPath}">${decodeURIComponent(part)}</a>`;
+                    }
+                });
+
+                document.getElementById('breadcrumb').innerHTML = breadcrumbHtml;
+
+                // Add click event to breadcrumb links
+                document.querySelectorAll('#breadcrumb a').forEach(link => {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        const path = this.getAttribute('data-path');
+                        currentPath = path;
+                        loadDirectory(path);
+                    });
+                });
+            }
+
+            // Function to process links and extract information
+            function processLinks(links) {
+                const items = [];
+
+                links.forEach(link => {
+                    // Skip parent directory link if it's the first one
+                    if (link.textContent === '../' && items.length === 0) {
+                        return;
+                    }
+
+                    const href = link.getAttribute('href');
+                    const isDirectory = href.endsWith('/');
+                    const name = decodeURIComponent(link.textContent);
+
+                    // Get date and size from the text following the link
+                    const parentText = link.parentNode.textContent;
+                    const textAfterLink = parentText.substring(parentText.indexOf(link.textContent) + link.textContent.length);
+
+                    // Extract date and size using regex
+                    const dateMatch = textAfterLink.match(/(\d{2}-[A-Za-z]{3}-\d{4} \d{2}:\d{2})/);
+                    const date = dateMatch ? dateMatch[1] : '';
+
+                    // Size is only relevant for files
+                    let size = '';
+                    if (!isDirectory) {
+                        const sizeMatch = textAfterLink.match(/(\d+)$/);
+                        size = sizeMatch ? formatFileSize(parseInt(sizeMatch[1])) : '';
+                    }
+
+                    items.push({
+                        name,
+                        href,
+                        isDirectory,
+                        date,
+                        size
+                    });
+                });
+
+                return items;
+            }
+
+            // Function to format file size in human-readable format
+            function formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+
+            // Function to render items to the page
+            function renderItems(items, currentPath) {
+                let html = '';
+
+                // Add parent directory link if not at root
+                if (currentPath !== '/') {
+                    html += `
+                        <div class="item">
+                            <div class="item-icon folder-icon">📁</div>
+                            <div class="item-name">
+                                <a href="#" data-path="${getParentPath(currentPath)}">..</a>
+                            </div>
+                            <div class="item-date"></div>
+                            <div class="item-size"></div>
+                        </div>
+                    `;
+                }
+
+                // First show directories
+                items.filter(item => item.isDirectory).forEach(item => {
+                    html += `
+                        <div class="item">
+                            <div class="item-icon folder-icon">📁</div>
+                            <div class="item-name">
+                                <a href="#" data-path="${currentPath + item.href}">${item.name}</a>
+                            </div>
+                            <div class="item-date">${item.date}</div>
+                            <div class="item-size">-</div>
+                        </div>
+                    `;
+                });
+
+                // Then show files
+                const mediaFiles = items.filter(item => !item.isDirectory && isMediaFile(item.name));
+                const otherFiles = items.filter(item => !item.isDirectory && !isMediaFile(item.name));
+
+                // Create media files list
+                mediaFiles.forEach(item => {
+                    // Determine file type
+                    const isVideo = /\.(mp4|webm|avi|mov|wmv|flv|mkv)$/i.test(item.name);
+                    const isAudio = /\.(mp3|wav|ogg|flac|aac)$/i.test(item.name);
+                    const isImage = /\.(jpg|jpeg|png|gif|bmp|svg|webp)$/i.test(item.name);
+
+                    let fileIcon = '📄';
+                    if (isVideo) fileIcon = '🎬';
+                    if (isAudio) fileIcon = '🎵';
+                    if (isImage) fileIcon = '🖼️';
+
+                    html += `
+                        <div class="item" data-media="${isVideo || isAudio}">
+                            <div class="item-icon file-icon">${fileIcon}</div>
+                            <div class="item-name">
+                                <a href="${baseUrl + currentPath + item.href}"
+                                   class="media-link"
+                                   data-src="${baseUrl + currentPath + item.href}"
+                                   data-type="${isVideo ? 'video' : (isAudio ? 'audio' : 'image')}">${item.name}</a>
+                            </div>
+                            <div class="item-date">${item.date}</div>
+                            <div class="item-size">${item.size}</div>
+                        </div>
+                    `;
+                });
+
+                // Create other files list
+                otherFiles.forEach(item => {
+                    html += `
+                        <div class="item">
+                            <div class="item-icon file-icon">📄</div>
+                            <div class="item-name">
+                                <a href="${baseUrl + currentPath + item.href}" target="_blank">${item.name}</a>
+                            </div>
+                            <div class="item-date">${item.date}</div>
+                            <div class="item-size">${item.size}</div>
+                        </div>
+                    `;
+                });
+
+                document.getElementById('listing').innerHTML = html;
+
+                // Add click event to directory links
+                document.querySelectorAll('#listing a[data-path]').forEach(link => {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        const path = this.getAttribute('data-path');
+                        currentPath = path;
+                        loadDirectory(path);
+                    });
+                });
+
+                // Add click event to media links
+                document.querySelectorAll('.media-link').forEach(link => {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        const src = this.getAttribute('data-src');
+                        const type = this.getAttribute('data-type');
+                        const name = this.textContent;
+
+                        // Create playlist from all media files in the current view
+                        createPlaylist();
+
+                        // Find index of the clicked file in the playlist
+                        currentPlaylistIndex = currentPlaylist.findIndex(item => item.src === src);
+
+                        // Play the selected file
+                        playMedia(src, type, name);
+                    });
+                });
+            }
+
+            // Function to get parent directory path
+            function getParentPath(path) {
+                const parts = path.split('/').filter(part => part !== '');
+                parts.pop(); // Remove last part
+                return '/' + parts.join('/') + '/';
+            }
+
+            // Function to check if file is a media file
+            function isMediaFile(filename) {
+                const mediaExtensions = /\.(mp4|webm|avi|mov|wmv|flv|mkv|mp3|wav|ogg|flac|aac|jpg|jpeg|png|gif|bmp|svg|webp)$/i;
+                return mediaExtensions.test(filename);
+            }
+
+            // Function to create a playlist from all media files in the current view
+            function createPlaylist() {
+                currentPlaylist = [];
+                playedIndices = []; // Reset played indices when creating a new playlist
+
+                document.querySelectorAll('.media-link').forEach(link => {
+                    currentPlaylist.push({
+                        src: link.getAttribute('data-src'),
+                        type: link.getAttribute('data-type'),
+                        name: link.textContent
+                    });
+                });
+
+                // Update the playlist UI
+                updatePlaylistUI();
+            }
+
+            // Function to update the playlist UI
+            function updatePlaylistUI() {
+                let playlistHtml = '';
+
+                currentPlaylist.forEach((item, index) => {
+                    const isActive = index === currentPlaylistIndex;
+                    playlistHtml += `
+                        <div class="playlist-item ${isActive ? 'active' : ''}" data-index="${index}">
+                            ${item.name}
+                        </div>
+                    `;
+                });
+
+                playlistContainer.innerHTML = playlistHtml;
+
+                // Add click event to playlist items
+                document.querySelectorAll('.playlist-item').forEach(item => {
+                    item.addEventListener('click', function() {
+                        const index = parseInt(this.getAttribute('data-index'));
+                        currentPlaylistIndex = index;
+
+                        const mediaItem = currentPlaylist[index];
+                        playMedia(mediaItem.src, mediaItem.type, mediaItem.name);
+                    });
+                });
+            }
+
+            // Play next media
+            function playNextMedia() {
+                if (currentPlaylist.length === 0) return;
+
+                if (isShuffleMode) {
+                    // In shuffle mode, play a random track that hasn't been played yet
+
+                    // If all tracks have been played, reset the played indices
+                    if (playedIndices.length >= currentPlaylist.length - 1) {
+                        // Keep only the current index in played indices
+                        playedIndices = [currentPlaylistIndex];
+                    }
+
+                    // Get available indices (not in playedIndices)
+                    const availableIndices = [];
+                    for (let i = 0; i < currentPlaylist.length; i++) {
+                        if (i !== currentPlaylistIndex && !playedIndices.includes(i)) {
+                            availableIndices.push(i);
+                        }
+                    }
+
+                    // Pick a random index from available indices
+                    const randomIndex = Math.floor(Math.random() * availableIndices.length);
+                    currentPlaylistIndex = availableIndices[randomIndex];
+
+                    // Add to played indices
+                    playedIndices.push(currentPlaylistIndex);
+                } else {
+                    // In sequential mode, play the next track
+                    currentPlaylistIndex = (currentPlaylistIndex + 1) % currentPlaylist.length;
+                }
+
+                const nextItem = currentPlaylist[currentPlaylistIndex];
+                playMedia(nextItem.src, nextItem.type, nextItem.name);
+            }
+
+            // Play previous media
+            function playPreviousMedia() {
+                if (currentPlaylist.length === 0) return;
+
+                if (isShuffleMode && playedIndices.length > 1) {
+                    // In shuffle mode, go back to the previously played track
+                    playedIndices.pop(); // Remove current index
+                    currentPlaylistIndex = playedIndices[playedIndices.length - 1];
+                    playedIndices.pop(); // Remove the index we're going back to (it will be re-added in playMedia)
+                } else {
+                    // In sequential mode or if no history, go to the previous track
+                    currentPlaylistIndex = (currentPlaylistIndex - 1 + currentPlaylist.length) % currentPlaylist.length;
+                }
+
+                const prevItem = currentPlaylist[currentPlaylistIndex];
+                playMedia(prevItem.src, prevItem.type, prevItem.name);
+            }
+
+            // Function to play media
+            function playMedia(src, type, name) {
+                // Set player title
+                playerTitle.textContent = name;
+
+                // Configure player based on media type
+                if (type === 'video' || type === 'audio') {
+                    // For video or audio, use the video element
+                    mediaPlayer.src = src;
+
+                    // Show/hide based on type
+                    mediaPlayer.style.display = 'block';
+
+                    // Start playback
+                    mediaPlayer.play();
+
+                    // Show media player container
+                    mediaPlayerContainer.style.display = 'flex';
+
+                    // Auto enter expanded mode
+                    toggleExpandedMode(true);
+
+                    // Update playlist UI
+                    updatePlaylistUI();
+
+                    // Add current index to playedIndices if in shuffle mode
+                    if (isShuffleMode && !playedIndices.includes(currentPlaylistIndex)) {
+                        playedIndices.push(currentPlaylistIndex);
+                    }
+                }
+            }
+
+            // Handle player events
+            mediaPlayer.addEventListener('ended', function() {
+                // Play next item in playlist
+                playNextMedia();
+            });
+
+            // Add event listener for play/pause state changes
+            mediaPlayer.addEventListener('play', function() {
+                playerPlay.style.display = 'none';
+                playerPause.style.display = 'block';
+            });
+
+            mediaPlayer.addEventListener('pause', function() {
+                playerPlay.style.display = 'block';
+                playerPause.style.display = 'none';
+            });
+
+            // Initialize play/pause button states
+            playerPause.style.display = 'none';
+
+            // Player controls
+            playerNext.addEventListener('click', playNextMedia);
+            playerPrev.addEventListener('click', playPreviousMedia);
+            playerPlay.addEventListener('click', function() {
+                mediaPlayer.play();
+            });
+            playerPause.addEventListener('click', function() {
+                mediaPlayer.pause();
+            });
+            playerStop.addEventListener('click', function() {
+                mediaPlayer.pause();
+                mediaPlayer.currentTime = 0;
+                playerPlay.style.display = 'block';
+                playerPause.style.display = 'none';
+            });
+
+            // Shuffle button handler
+            playerShuffle.addEventListener('click', function() {
+                isShuffleMode = !isShuffleMode;
+
+                // Update button appearance
+                if (isShuffleMode) {
+                    playerShuffle.classList.add('active');
+                } else {
+                    playerShuffle.classList.remove('active');
+                }
+
+                // Reset played indices when turning shuffle on/off
+                if (currentPlaylistIndex !== -1) {
+                    playedIndices = [currentPlaylistIndex];
+                }
+            });
+
+            // Fullscreen button handler
+            playerFullscreen.addEventListener('click', function() {
+                if (document.fullscreenElement) {
+                    // Exit fullscreen
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) { /* Safari */
+                        document.webkitExitFullscreen();
+                    } else if (document.msExitFullscreen) { /* IE11 */
+                        document.msExitFullscreen();
+                    }
+                } else {
+                    // Try native fullscreen first
+                    if (mediaPlayer.requestFullscreen) {
+                        mediaPlayer.requestFullscreen();
+                    } else if (mediaPlayer.webkitRequestFullscreen) { /* Safari */
+                        mediaPlayer.webkitRequestFullscreen();
+                    } else if (mediaPlayer.msRequestFullscreen) { /* IE11 */
+                        mediaPlayer.msRequestFullscreen();
+                    } else {
+                        // Fallback to expanded mode if fullscreen API is not available
+                        toggleExpandedMode(!isExpanded);
+                    }
+                }
+            });
+
+            // Toggle expanded mode (not real fullscreen but fills window)
+            function toggleExpandedMode(forceState = null) {
+                isExpanded = (forceState !== null) ? forceState : !isExpanded;
+
+                if (isExpanded) {
+                    mediaPlayerContainer.classList.add('expanded-player');
+                } else {
+                    mediaPlayerContainer.classList.remove('expanded-player');
+                }
+            }
+
+            // Listen for fullscreen change events
+            document.addEventListener('fullscreenchange', handleFullscreenChange);
+            document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+            document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+            document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+            function handleFullscreenChange() {
+                if (!document.fullscreenElement && !document.webkitFullscreenElement &&
+                    !document.mozFullScreenElement && !document.msFullscreenElement) {
+                    // We've exited fullscreen, ensure expanded mode is activated
+                    toggleExpandedMode(true);
+                }
+            }
+
+            // Close player
+            playerClose.addEventListener('click', function() {
+                mediaPlayer.pause();
+                mediaPlayerContainer.style.display = 'none';
+                toggleExpandedMode(false);
+            });
+
+            // Close player on Escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && mediaPlayerContainer.style.display === 'flex') {
+                    // If in fullscreen, exit it first
+                    if (document.fullscreenElement) {
+                        if (document.exitFullscreen) {
+                            document.exitFullscreen();
+                        }
+                        return; // Let the fullscreenchange event handle the rest
+                    }
+
+                    mediaPlayer.pause();
+                    mediaPlayerContainer.style.display = 'none';
+                    toggleExpandedMode(false);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

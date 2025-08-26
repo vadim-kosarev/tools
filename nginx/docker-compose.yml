@@ -1,7 +1,7 @@
 services:
   wifi-ap:
-    restart: always
     build: .
+    restart: always
     privileged: true
     network_mode: host
     pid: host
@@ -9,8 +9,15 @@ services:
       - AP_IFACE=wlan1
       - AP_IP=192.168.50.1
       - PROFILE=${PROFILE}
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
+      - PYTHONIOENCODING=UTF-8
     volumes:
       - ./py:/app
       - ./var/www/vkosarev.name:/var/www/vkosarev.name
-      - ./etc/nginx/sites-available/vaduha_nn.local:/etc/nginx/sites-enabled/vaduha_nn.local
-
+      - ./etc/nginx/sites-available/vaduha_nn.local.conf:/etc/nginx/sites-enabled/vaduha_nn.local.conf
+      - /data/video:/data/video
+#    ports:
+#      - "81:80"
+#      - "443:443"
+#      - "1501:1501"

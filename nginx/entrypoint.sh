@@ -3,9 +3,6 @@ set -euo pipefail
 
 log() { echo "[/entyrpoint.sh] [$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
 
-log "Starting in 30 seconds..."
-sleep 30
-log "Starting..."
 
 retry_cmd() {
   local tries=$1; shift
@@ -24,6 +21,9 @@ retry_cmd() {
 if [ "${PROFILE:-}" == "dev" ]; then
   log "DEV mode (PROFILE=dev) - skipping WiFi AP setup"
 else
+  log "Starting in 30 seconds..."
+  sleep 30
+  log "Starting..."
   IFACE=${AP_IFACE:-wlan1}
   IPADDR=${AP_IP:-192.168.50.1}
 
@@ -91,19 +91,17 @@ nginx
 log "Starting Python API in background"
 python3 ./back.py &
 
-# Примитивный watchdog: если hostapd упадет, выводим диагностику (периодический чек)
-(
-  while true; do
-    sleep 30
-    if pgrep hostapd >/dev/null; then
-      continue
-    else
-      log "hostapd process not found";
-      ip addr show dev "${AP_IFACE:-wlan1}" || true
-      break
-    fi
-  done
-) &
+#(
+#  while true; do
+#    sleep 30
+#    if pgrep hostapd >/dev/null; then
+#      continue
+#    else
+#      log "hostapd process not found";
+#      ip addr show dev "${AP_IFACE:-wlan1}" || true
+#      break
+#    fi
+#  done
+#) &
 
-# Поддерживать контейнер живым
 tail -f /dev/null
