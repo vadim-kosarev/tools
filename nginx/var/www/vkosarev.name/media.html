@@ -7,14 +7,14 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
+            margin: 0 1px;
+            padding: 1px 1px;
             background-color: #f5f5f5;
         }
         #content {
             background-color: white;
             border-radius: 5px;
-            padding: 20px;
+            padding: 2px 2px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
         h1 {
@@ -37,9 +37,14 @@
         }
         .item {
             display: flex;
-            padding: 15px; /* Увеличен отступ для более просторного вида */
+            padding: 0px 1px;
             border-bottom: 1px solid #eee;
             align-items: center;
+            margin: 0 0 2px 0;
+            line-height: 1;
+        }
+        .item:last-child {
+            margin-bottom: 0;
         }
         .item:hover {
             background-color: #f8f9fa;
@@ -59,7 +64,6 @@
         .item-name a:hover {
             text-decoration: underline;
         }
-        /* Скрываем дату файла */
         .item-date {
             display: none;
         }
@@ -74,12 +78,12 @@
         .file-icon {
             color: #6c757d;
         }
-        /* Стили для thumbnails */
         .item-thumbnail {
-            width: 128px;  /* Увеличено в 4 раза с 32px */
-            height: 128px; /* Увеличено в 4 раза с 32px */
-            margin-right: 15px; /* Увеличен отступ для лучшего вида */
+            width: 128px;
+            height: 80px;
+            margin-right: 15px;
             object-fit: contain;
+            vertical-align: middle;
         }
         .loading {
             text-align: center;
@@ -94,7 +98,6 @@
             border-radius: 5px;
             margin-bottom: 20px;
         }
-        /* Media player styles */
         #media-player-container {
             position: fixed;
             top: 0;
@@ -110,7 +113,7 @@
         }
         #media-player-wrapper {
             position: relative;
-            width: 80%;
+            width: 95%;
             max-width: 1000px;
         }
         #media-player {
@@ -119,7 +122,7 @@
             outline: none;
         }
         #player-controls {
-            width: 80%;
+            width: 90%;
             max-width: 1000px;
             margin-top: 20px;
             color: white;
@@ -145,18 +148,19 @@
             background: none;
             border: none;
             outline: none;
+            z-index: 1001;
         }
         #playlist-container {
             width: 80%;
             max-width: 1000px;
-            max-height: 150px;
+            max-height: 350px;
             overflow-y: auto;
             margin-top: 20px;
             background-color: rgba(255, 255, 255, 0.1);
             border-radius: 5px;
         }
         .playlist-item {
-            padding: 10px;
+            padding: 5px;
             color: white;
             cursor: pointer;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
@@ -167,7 +171,6 @@
         .playlist-item.active {
             background-color: rgba(0, 123, 255, 0.5);
         }
-        /* Player icon buttons styles */
         .player-btn {
             background-color: rgba(34, 34, 34, 0.7);
             border: none;
@@ -187,18 +190,17 @@
             background-color: rgba(60, 60, 60, 0.9);
         }
         .player-btn.active {
-            background-color: rgba(65, 105, 225, 0.8); /* Royal Blue for active state */
+            background-color: rgba(65, 105, 225, 0.8);
         }
         .player-btn img {
             width: 24px;
             height: 24px;
-            filter: invert(1); /* Make black icon white */
+            filter: invert(1);
         }
         #player-next-prev {
             display: flex;
             gap: 5px;
         }
-        /* Fullscreen styles */
         #media-player:-webkit-full-screen {
             width: 100%;
             height: 100%;
@@ -212,7 +214,6 @@
         #player-fullscreen {
             margin-left: 10px;
         }
-        /* When player container is in expanded mode (not real fullscreen but fills window) */
         .expanded-player #media-player-wrapper {
             width: 95%;
             height: 90vh;
@@ -239,7 +240,6 @@
         </div>
     </div>
 
-    <!-- Media Player -->
     <div id="media-player-container">
         <button id="player-close">×</button>
         <div id="player-title"></div>
@@ -277,12 +277,8 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Base URL for requests
-            //const baseUrl = 'http://localhost:81';
             const baseUrl = '';
-            // Current path - start at /video/dst/
             let currentPath = '/video/dst/';
-            // Media player elements
             const mediaPlayerContainer = document.getElementById('media-player-container');
             const mediaPlayer = document.getElementById('media-player');
             const playerTitle = document.getElementById('player-title');
@@ -296,28 +292,17 @@
             const playerFullscreen = document.getElementById('player-fullscreen');
             const playerShuffle = document.getElementById('player-shuffle');
 
-            // Flag to track if we're in expanded mode
             let isExpanded = false;
-
-            // Shuffle mode - true by default
             let isShuffleMode = true;
-
-            // Media playlist
             let currentPlaylist = [];
             let currentPlaylistIndex = -1;
-
-            // Used for shuffle mode
             let playedIndices = [];
 
-            // Initial load
             loadDirectory(currentPath);
 
-            // Function to load directory contents
             function loadDirectory(path) {
-                // Update UI to show loading state
                 document.getElementById('listing').innerHTML = '<div class="loading">Loading content...</div>';
 
-                // Make AJAX request
                 fetch(baseUrl + path)
                     .then(response => {
                         if (!response.ok) {
@@ -326,27 +311,15 @@
                         return response.text();
                     })
                     .then(html => {
-                        // Parse the HTML response
                         const parser = new DOMParser();
                         const doc = parser.parseFromString(html, 'text/html');
-
-                        // Extract directory information
                         const title = doc.querySelector('h1').textContent;
-
-                        // Update breadcrumb
                         updateBreadcrumb(path);
-
-                        // Extract links (directories and files)
                         const links = Array.from(doc.querySelectorAll('pre a'));
-
-                        // Process links and extract information
                         const items = processLinks(links);
-
-                        // Render items to page
                         renderItems(items, path);
                     })
                     .catch(error => {
-                        console.error('Error loading directory:', error);
                         document.getElementById('listing').innerHTML = `
                             <div class="error">
                                 Error loading directory: ${error.message}
@@ -355,7 +328,6 @@
                     });
             }
 
-            // Function to update breadcrumb navigation
             function updateBreadcrumb(path) {
                 const parts = path.split('/').filter(part => part !== '');
                 let breadcrumbHtml = '<a href="#" data-path="/">Root</a>';
@@ -365,7 +337,6 @@
                     currentPath += part + '/';
                     breadcrumbHtml += ' / ';
 
-                    // If it's the last item, don't make it clickable
                     if (index === parts.length - 1) {
                         breadcrumbHtml += `<span>${decodeURIComponent(part)}</span>`;
                     } else {
@@ -375,7 +346,6 @@
 
                 document.getElementById('breadcrumb').innerHTML = breadcrumbHtml;
 
-                // Add click event to breadcrumb links
                 document.querySelectorAll('#breadcrumb a').forEach(link => {
                     link.addEventListener('click', function(e) {
                         e.preventDefault();
@@ -386,12 +356,11 @@
                 });
             }
 
-            // Function to process links and extract information
             function processLinks(links) {
                 const items = [];
 
                 links.forEach(link => {
-                    // Skip parent directory link if it's the first one
+
                     if (link.textContent === '../' && items.length === 0) {
                         return;
                     }
@@ -399,22 +368,16 @@
                     const href = link.getAttribute('href');
                     const name = decodeURIComponent(link.textContent);
 
-                    // Фильтруем элементы, начинающиеся с "_"
                     if (name.startsWith('_')) {
                         return;
                     }
 
                     const isDirectory = href.endsWith('/');
-
-                    // Get date and size from the text following the link
                     const parentText = link.parentNode.textContent;
                     const textAfterLink = parentText.substring(parentText.indexOf(link.textContent) + link.textContent.length);
-
-                    // Extract date and size using regex (дата нам все равно нужна для сортировки)
                     const dateMatch = textAfterLink.match(/(\d{2}-[A-Za-z]{3}-\d{4} \d{2}:\d{2})/);
                     const date = dateMatch ? dateMatch[1] : '';
 
-                    // Size is only relevant for files
                     let size = '';
                     if (!isDirectory) {
                         const sizeMatch = textAfterLink.match(/(\d+)$/);
@@ -433,7 +396,6 @@
                 return items;
             }
 
-            // Function to format file size in human-readable format
             function formatFileSize(bytes) {
                 if (bytes === 0) return '0 Bytes';
 
@@ -444,17 +406,12 @@
                 return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
             }
 
-            // Function to get file name without extension
             function getNameWithoutExtension(filename) {
-                // Если это директория, удаляем '/' в конце
                 if (filename.endsWith('/')) {
                     filename = filename.slice(0, -1);
                 }
 
-                // Получаем только имя файла без пути
                 const baseName = filename.split('/').pop();
-
-                // Удаляем расширение файла
                 const dotIndex = baseName.lastIndexOf('.');
                 if (dotIndex !== -1) {
                     return baseName.substring(0, dotIndex);
@@ -462,9 +419,7 @@
                 return baseName;
             }
 
-            // Function to get thumbnail path
             function getThumbnailPath(itemName, itemHref, itemType) {
-                // Если это стандартная иконка, возвращаем её путь
                 if (itemType === 'directory') {
                     return './images/icons/folder.png';
                 } else if (itemType === 'audio') {
@@ -473,104 +428,78 @@
                     return './images/icons/media.png';
                 }
 
-                // Удаляем расширение из имени файла и получаем название без расширения
                 const nameWithoutExt = getNameWithoutExtension(itemName);
-
-                // Извлекаем текущий путь относительно /video/
-                // Текущий путь имеет вид '/video/dst/' или подобный
                 const videoBasePath = '/video/';
                 let relativePath = '';
 
-                // Проверяем, начинается ли currentPath с '/video/'
                 if (currentPath.startsWith(videoBasePath)) {
                     relativePath = currentPath.substring(videoBasePath.length);
                 } else {
-                    // Если текущий путь не начинается с '/video/', используем его как есть
                     relativePath = currentPath;
-                    // Убираем ведущий слеш, если он есть
                     if (relativePath.startsWith('/')) {
                         relativePath = relativePath.substring(1);
                     }
                 }
 
-                // Формируем путь к thumbnail с учетом новой структуры:
-                // /video/_thumbs/[относительный_путь]/[имя_файла_без_расширения].jpg
                 const thumbPath = '/video/_thumbs/' + relativePath + nameWithoutExt + '.jpg';
-
-                console.log("Generated thumbnail path:", thumbPath);
                 return thumbPath;
             }
 
-            // Function to check if thumbnail exists
             function checkThumbnailExists(thumbPath, fallbackPath, callback) {
-                // Выводим в консоль URL проверяемого thumbnail
-                console.log("Checking thumbnail: " + thumbPath);
-
-                // Если это путь к иконке по умолчанию, сразу возвращаем его
                 if (thumbPath.startsWith('./images/icons/')) {
                     callback(thumbPath);
                     return;
                 }
 
-                // Проверяем существование файла thumbnail
                 fetch(thumbPath, { method: 'HEAD' })
                     .then(response => {
                         if (response.ok) {
-                            console.log("Thumbnail found: " + thumbPath);
-                            callback(thumbPath); // Thumbnail существует
+                            callback(thumbPath);
                         } else {
-                            console.log("Thumbnail not found: " + thumbPath + ", using fallback: " + fallbackPath);
-                            callback(fallbackPath); // Используем fallback иконку
+                            callback(fallbackPath);
                         }
                     })
                     .catch(() => {
-                        console.log("Error checking thumbnail: " + thumbPath + ", using fallback: " + fallbackPath);
-                        callback(fallbackPath); // При ошибке используем fallback иконку
+                        callback(fallbackPath);
                     });
             }
 
-            // Function to render items to the page
             function renderItems(items, currentPath) {
                 let html = '';
 
-                // Add parent directory link if not at root
                 if (currentPath !== '/') {
                     html += `
                         <div class="item">
-                            <img src="./images/icons/folder.png" class="item-thumbnail" alt="Parent directory">
+                            <a href="#" data-path="${getParentPath(currentPath)}">
+                                <img src="./images/icons/folder.png" class="item-thumbnail" alt="Parent directory">
+                            </a>
                             <div class="item-name">
                                 <a href="#" data-path="${getParentPath(currentPath)}">..</a>
                             </div>
-                            <div class="item-date"></div>
-                            <div class="item-size"></div>
                         </div>
                     `;
                 }
 
-                // First show directories
                 items.filter(item => item.isDirectory).forEach(item => {
                     const nameWithoutExt = getNameWithoutExtension(item.name);
                     const thumbnailPath = getThumbnailPath(item.name, item.href, 'directory');
 
                     html += `
                         <div class="item">
-                            <img src="${thumbnailPath}" class="item-thumbnail" alt="Folder">
+                            <a href="#" data-path="${currentPath + item.href}">
+                                <img src="${thumbnailPath}" class="item-thumbnail" alt="Folder">
+                            </a>
                             <div class="item-name">
                                 <a href="#" data-path="${currentPath + item.href}">${nameWithoutExt}</a>
                             </div>
-                            <div class="item-date">${item.date}</div>
-                            <div class="item-size">-</div>
                         </div>
                     `;
                 });
 
-                // Then show files
                 const mediaFiles = items.filter(item => !item.isDirectory && isMediaFile(item.name));
                 const otherFiles = items.filter(item => !item.isDirectory && !isMediaFile(item.name));
 
-                // Create media files list
                 mediaFiles.forEach(item => {
-                    // Determine file type
                     const isVideo = /\.(mp4|webm|avi|mov|wmv|flv|mkv)$/i.test(item.name);
                     const isAudio = /\.(mp3|wav|ogg|flac|aac)$/i.test(item.name);
                     const isImage = /\.(jpg|jpeg|png|gif|bmp|svg|webp)$/i.test(item.name);
@@ -581,31 +510,40 @@
 
                     const fallbackIcon = isVideo || isImage ? './images/icons/media.png' :
                                          isAudio ? './images/icons/audio.png' : './images/icons/media.png';
+                    console.log("nameWithoutExt: " + nameWithoutExt);
 
                     html += `
                         <div class="item" data-media="${isVideo || isAudio}">
-                            <img src="${thumbnailPath}" class="item-thumbnail" alt="Media"
-                                 onerror="this.onerror=null; this.src='${fallbackIcon}';">
+                            <a href="${baseUrl + currentPath + item.href}"
+                               class="media-link"
+                               data-src="${baseUrl + currentPath + item.href}"
+                               data-type="${fileType}"
+                               data-text="${nameWithoutExt}"
+                               data-skip="true"
+                               ><img src="${thumbnailPath}" class="item-thumbnail" alt="Media"
+                                     onerror="this.onerror=null; this.src='${fallbackIcon}';"
+                                     /></a>
                             <div class="item-name">
                                 <a href="${baseUrl + currentPath + item.href}"
                                    class="media-link"
                                    data-src="${baseUrl + currentPath + item.href}"
-                                   data-type="${fileType}">${nameWithoutExt}</a>
+                                   data-type="${fileType}"
+                                   data-text="${nameWithoutExt}"
+                                   >${nameWithoutExt}</a>
                             </div>
-                            <div class="item-date">${item.date}</div>
-                            <div class="item-size">${item.size}</div>
                         </div>
                     `;
                 });
 
-                // Create other files list
                 otherFiles.forEach(item => {
                     const nameWithoutExt = getNameWithoutExtension(item.name);
                     const thumbnailPath = './images/icons/media.png';
 
                     html += `
                         <div class="item">
-                            <img src="${thumbnailPath}" class="item-thumbnail" alt="File">
+                            <a href="${baseUrl + currentPath + item.href}" target="_blank">
+                                <img src="${thumbnailPath}" class="item-thumbnail" alt="File">
+                            </a>
                             <div class="item-name">
                                 <a href="${baseUrl + currentPath + item.href}" target="_blank">${nameWithoutExt}</a>
                             </div>
@@ -617,7 +555,6 @@
 
                 document.getElementById('listing').innerHTML = html;
 
-                // Add click event to directory links
                 document.querySelectorAll('#listing a[data-path]').forEach(link => {
                     link.addEventListener('click', function(e) {
                         e.preventDefault();
@@ -627,72 +564,64 @@
                     });
                 });
 
-                // Add click event to media links
                 document.querySelectorAll('.media-link').forEach(link => {
                     link.addEventListener('click', function(e) {
                         e.preventDefault();
                         const src = this.getAttribute('data-src');
                         const type = this.getAttribute('data-type');
-                        const name = this.textContent;
+                        //const name = this.textContent || this.parentNode.querySelector('.item-name a').textContent;
+                        const name = this.getAttribute('data-text');
 
-                        // Create playlist from all media files in the current view
                         createPlaylist();
-
-                        // Find index of the clicked file in the playlist
                         currentPlaylistIndex = currentPlaylist.findIndex(item => item.src === src);
-
-                        // Play the selected file
                         playMedia(src, type, name);
                     });
                 });
             }
 
-            // Function to get parent directory path
             function getParentPath(path) {
                 const parts = path.split('/').filter(part => part !== '');
-                parts.pop(); // Remove last part
+                parts.pop();
                 return '/' + parts.join('/') + '/';
             }
 
-            // Function to check if file is a media file
             function isMediaFile(filename) {
                 const mediaExtensions = /\.(mp4|webm|avi|mov|wmv|flv|mkv|mp3|wav|ogg|flac|aac|jpg|jpeg|png|gif|bmp|svg|webp)$/i;
                 return mediaExtensions.test(filename);
             }
 
-            // Function to create a playlist from all media files in the current view
             function createPlaylist() {
                 currentPlaylist = [];
-                playedIndices = []; // Reset played indices when creating a new playlist
+                playedIndices = [];
 
                 document.querySelectorAll('.media-link').forEach(link => {
+
+                    if (link.getAttribute('data-skip') === 'true') {
+                        return;
+                    }
+
                     currentPlaylist.push({
                         src: link.getAttribute('data-src'),
                         type: link.getAttribute('data-type'),
-                        name: link.textContent
+                        //name: link.textContent
+                        name: link.getAttribute('data-text')
                     });
+                    console.log("link: " + link.textContent);
                 });
 
-                // Update the playlist UI
                 updatePlaylistUI();
             }
 
-            // Function to update the playlist UI
             function updatePlaylistUI() {
                 let playlistHtml = '';
 
                 currentPlaylist.forEach((item, index) => {
                     const isActive = index === currentPlaylistIndex;
-                    playlistHtml += `
-                        <div class="playlist-item ${isActive ? 'active' : ''}" data-index="${index}">
-                            ${item.name}
-                        </div>
-                    `;
+                    playlistHtml += `<div class="playlist-item ${isActive ? 'active' : ''}" data-index="${index}">${item.name}</div>`;
                 });
 
                 playlistContainer.innerHTML = playlistHtml;
 
-                // Add click event to playlist items
                 document.querySelectorAll('.playlist-item').forEach(item => {
                     item.addEventListener('click', function() {
                         const index = parseInt(this.getAttribute('data-index'));
@@ -704,20 +633,14 @@
                 });
             }
 
-            // Play next media
             function playNextMedia() {
                 if (currentPlaylist.length === 0) return;
 
                 if (isShuffleMode) {
-                    // In shuffle mode, play a random track that hasn't been played yet
-
-                    // If all tracks have been played, reset the played indices
                     if (playedIndices.length >= currentPlaylist.length - 1) {
-                        // Keep only the current index in played indices
                         playedIndices = [currentPlaylistIndex];
                     }
 
-                    // Get available indices (not in playedIndices)
                     const availableIndices = [];
                     for (let i = 0; i < currentPlaylist.length; i++) {
                         if (i !== currentPlaylistIndex && !playedIndices.includes(i)) {
@@ -725,14 +648,10 @@
                         }
                     }
 
-                    // Pick a random index from available indices
                     const randomIndex = Math.floor(Math.random() * availableIndices.length);
                     currentPlaylistIndex = availableIndices[randomIndex];
-
-                    // Add to played indices
                     playedIndices.push(currentPlaylistIndex);
                 } else {
-                    // In sequential mode, play the next track
                     currentPlaylistIndex = (currentPlaylistIndex + 1) % currentPlaylist.length;
                 }
 
@@ -740,17 +659,14 @@
                 playMedia(nextItem.src, nextItem.type, nextItem.name);
             }
 
-            // Play previous media
             function playPreviousMedia() {
                 if (currentPlaylist.length === 0) return;
 
                 if (isShuffleMode && playedIndices.length > 1) {
-                    // In shuffle mode, go back to the previously played track
-                    playedIndices.pop(); // Remove current index
+                    playedIndices.pop();
                     currentPlaylistIndex = playedIndices[playedIndices.length - 1];
-                    playedIndices.pop(); // Remove the index we're going back to (it will be re-added in playMedia)
+                    playedIndices.pop();
                 } else {
-                    // In sequential mode or if no history, go to the previous track
                     currentPlaylistIndex = (currentPlaylistIndex - 1 + currentPlaylist.length) % currentPlaylist.length;
                 }
 
@@ -758,45 +674,26 @@
                 playMedia(prevItem.src, prevItem.type, prevItem.name);
             }
 
-            // Function to play media
             function playMedia(src, type, name) {
-                // Set player title
                 playerTitle.textContent = name;
 
-                // Configure player based on media type
                 if (type === 'video' || type === 'audio') {
-                    // For video or audio, use the video element
                     mediaPlayer.src = src;
-
-                    // Show/hide based on type
                     mediaPlayer.style.display = 'block';
-
-                    // Start playback
                     mediaPlayer.play();
-
-                    // Show media player container
                     mediaPlayerContainer.style.display = 'flex';
-
-                    // Removed auto-expanded mode activation - no longer using:
-                    // toggleExpandedMode(true);
-
-                    // Update playlist UI
                     updatePlaylistUI();
 
-                    // Add current index to playedIndices if in shuffle mode
                     if (isShuffleMode && !playedIndices.includes(currentPlaylistIndex)) {
                         playedIndices.push(currentPlaylistIndex);
                     }
                 }
             }
 
-            // Handle player events
             mediaPlayer.addEventListener('ended', function() {
-                // Play next item in playlist
                 playNextMedia();
             });
 
-            // Add event listener for play/pause state changes
             mediaPlayer.addEventListener('play', function() {
                 playerPlay.style.display = 'none';
                 playerPause.style.display = 'block';
@@ -807,10 +704,8 @@
                 playerPause.style.display = 'none';
             });
 
-            // Initialize play/pause button states
             playerPause.style.display = 'none';
 
-            // Player controls
             playerNext.addEventListener('click', playNextMedia);
             playerPrev.addEventListener('click', playPreviousMedia);
             playerPlay.addEventListener('click', function() {
@@ -826,50 +721,42 @@
                 playerPause.style.display = 'none';
             });
 
-            // Shuffle button handler
             playerShuffle.addEventListener('click', function() {
                 isShuffleMode = !isShuffleMode;
 
-                // Update button appearance
                 if (isShuffleMode) {
                     playerShuffle.classList.add('active');
                 } else {
                     playerShuffle.classList.remove('active');
                 }
 
-                // Reset played indices when turning shuffle on/off
                 if (currentPlaylistIndex !== -1) {
                     playedIndices = [currentPlaylistIndex];
                 }
             });
 
-            // Fullscreen button handler
             playerFullscreen.addEventListener('click', function() {
                 if (document.fullscreenElement) {
-                    // Exit fullscreen
                     if (document.exitFullscreen) {
                         document.exitFullscreen();
-                    } else if (document.webkitExitFullscreen) { /* Safari */
+                    } else if (document.webkitExitFullscreen) {
                         document.webkitExitFullscreen();
-                    } else if (document.msExitFullscreen) { /* IE11 */
+                    } else if (document.msExitFullscreen) {
                         document.msExitFullscreen();
                     }
                 } else {
-                    // Try native fullscreen first
                     if (mediaPlayer.requestFullscreen) {
                         mediaPlayer.requestFullscreen();
-                    } else if (mediaPlayer.webkitRequestFullscreen) { /* Safari */
+                    } else if (mediaPlayer.webkitRequestFullscreen) {
                         mediaPlayer.webkitRequestFullscreen();
-                    } else if (mediaPlayer.msRequestFullscreen) { /* IE11 */
+                    } else if (mediaPlayer.msRequestFullscreen) {
                         mediaPlayer.msRequestFullscreen();
                     } else {
-                        // Fallback to expanded mode if fullscreen API is not available
                         toggleExpandedMode(!isExpanded);
                     }
                 }
             });
 
-            // Toggle expanded mode (not real fullscreen but fills window)
             function toggleExpandedMode(forceState = null) {
                 isExpanded = (forceState !== null) ? forceState : !isExpanded;
 
@@ -880,7 +767,6 @@
                 }
             }
 
-            // Listen for fullscreen change events
             document.addEventListener('fullscreenchange', handleFullscreenChange);
             document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
             document.addEventListener('mozfullscreenchange', handleFullscreenChange);
@@ -889,27 +775,23 @@
             function handleFullscreenChange() {
                 if (!document.fullscreenElement && !document.webkitFullscreenElement &&
                     !document.mozFullScreenElement && !document.msFullscreenElement) {
-                    // We've exited fullscreen, ensure expanded mode is activated
                     toggleExpandedMode(true);
                 }
             }
 
-            // Close player
             playerClose.addEventListener('click', function() {
                 mediaPlayer.pause();
                 mediaPlayerContainer.style.display = 'none';
                 toggleExpandedMode(false);
             });
 
-            // Close player on Escape key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && mediaPlayerContainer.style.display === 'flex') {
-                    // If in fullscreen, exit it first
                     if (document.fullscreenElement) {
                         if (document.exitFullscreen) {
                             document.exitFullscreen();
                         }
-                        return; // Let the fullscreenchange event handle the rest
+                        return;
                     }
 
                     mediaPlayer.pause();

@@ -22,13 +22,13 @@ services:
       - "443:443"
       - "1501:1501"
 
-  h5ai:
-    image: jellyfina/h5ai:lite
-    container_name: h5ai
-    ports:
-      - "1502:80"
-    environment:
-      LANG: ru_RU.UTF-8
-      TZ: Europe/Moscow
-    volumes:
-      - C:/data/video/dst:/www
+#  h5ai:
+#    image: jellyfina/h5ai:lite
+#    container_name: h5ai
+#    ports:
+#      - "1502:80"
+#    environment:
+#      LANG: ru_RU.UTF-8
+#      TZ: Europe/Moscow
+#    volumes:
+#      - C:/data/video/dst:/www
