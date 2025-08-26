@@ -78,13 +78,15 @@
         .file-icon {
             color: #6c757d;
         }
+
         .item-thumbnail {
-            width: 128px;
             height: 80px;
+            width: auto;
             margin-right: 15px;
             object-fit: contain;
             vertical-align: middle;
         }
+
         .loading {
             text-align: center;
             padding: 20px;
@@ -428,27 +430,35 @@
             }
 
             function getThumbnailPath(itemName, itemHref, itemType) {
-                if (itemType === 'directory') {
-                    return './images/icons/folder.png';
-                } else if (itemType === 'audio') {
-                    return './images/icons/audio.png';
-                } else if (itemType !== 'video' && itemType !== 'image') {
-                    return './images/icons/media.png';
-                }
-
                 const nameWithoutExt = getNameWithoutExtension(itemName);
+
+                // Define default icons based on item type
+                let defaultIcon;
+                if (itemType === 'directory') {
+                    defaultIcon = './images/icons/folder.png';
+                } else if (itemType === 'audio') {
+                    defaultIcon = './images/icons/audio.png';
+                } else {
+                    defaultIcon = './images/icons/media.png';
+                }
 
                 // Get path from URL hash without the leading #
                 let path = window.location.hash.substring(1);
 
-                // For video and image files, construct the thumbnail path
+                // For video, image files, and directories, try to get thumbnail from _thumbs
                 if (path.startsWith('/video/')) {
                     // Insert _thumbs after /video/ in the path
                     const thumbPath = '/video/_thumbs/' + path.substring('/video/'.length) + nameWithoutExt + '.jpg';
-                    return thumbPath;
+                    return {
+                        path: thumbPath,
+                        fallback: defaultIcon
+                    };
                 } else {
                     // Fallback for non-video paths
-                    return './images/icons/media.png';
+                    return {
+                        path: defaultIcon,
+                        fallback: defaultIcon
+                    };
                 }
             }
 
@@ -476,6 +486,7 @@
 
                 // Only show parent directory link if not in the root video directory
                 if (currentPath !== '/video/' && currentPath !== '/') {
+
                     html += `
                         <div class="item">
                             <a href="#" data-path="${getParentPath(currentPath)}">
@@ -495,7 +506,8 @@
                     html += `
                         <div class="item">
                             <a href="#" data-path="${currentPath + item.href}">
-                                <img src="${thumbnailPath}" class="item-thumbnail" alt="Folder">
+                                <img src="${thumbnailPath.path}" class="item-thumbnail" alt="Folder"
+                                     onerror="this.onerror=null; this.src='${thumbnailPath.fallback}';">
                             </a>
                             <div class="item-name">
                                 <a href="#" data-path="${currentPath + item.href}">${nameWithoutExt}</a>
@@ -527,8 +539,8 @@
                                data-type="${fileType}"
                                data-text="${nameWithoutExt}"
                                data-skip="true"
-                               ><img src="${thumbnailPath}" class="item-thumbnail" alt="Media"
-                                     onerror="this.onerror=null; this.src='${fallbackIcon}';"
+                               ><img src="${thumbnailPath.path}" class="item-thumbnail" alt="Media"
+                                     onerror="this.onerror=null; this.src='${thumbnailPath.fallback}';"
                                      /></a>
                             <div class="item-name">
                                 <a href="${baseUrl + currentPath + item.href}"
