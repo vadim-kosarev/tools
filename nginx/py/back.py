@@ -6,10 +6,10 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from urllib.parse import urlencode
-
+from fastapi import Response, status
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.openapi.models import Response
 from starlette.responses import RedirectResponse
 
 app = FastAPI()
@@ -286,7 +286,8 @@ async def auth_wifi(request: Request):
 
     if isAuth:
         if "Android" in request.headers.get("user-agent", ""):
-            return {"message": "No Content"}, 204
+            # return 204 no content
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         return {"message": "Success"}
 
     orig_scheme = request.headers.get("x-original-scheme")
