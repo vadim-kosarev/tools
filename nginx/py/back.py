@@ -9,7 +9,7 @@ from datetime import datetime
 
 import uvicorn
 from fastapi import Response, status, FastAPI, Request
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, PlainTextResponse
 
 app = FastAPI()
 
@@ -278,8 +278,8 @@ def checkAuth(request: Request):
     return False
 
 
-@app.get("/auth-wifi/{path:path}")
-async def auth_wifi(request: Request):
+@app.get("/auth-wifi-check/{path:path}")
+async def auth_wifi_check(request: Request):
     log_info = format_request_log(request, None)
     print(f"auth_wifi: {log_info}")
 
@@ -290,18 +290,29 @@ async def auth_wifi(request: Request):
     clientRequestUrl = f'{orig_scheme}://{orig_host}{request.url.path}'
 
     isAuth = checkAuth(request)
+    redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
 
     if isAuth:
-        if "_204" in request.url.path:
-            print(f"[AUTH WIFI] {clientRequestUrl} --> {204}")
+        path = request.url.path.lower()
+
+        if "generate_204" in path:
+            print(f"[AUTH WIFI] {clientRequestUrl} -> HTTP_204_NO_CONTENT")
             return Response(status_code=status.HTTP_204_NO_CONTENT)
-        else:
-            print(f"[AUTH WIFI] {clientRequestUrl} --> Success")
-            return "Success"
-    else:
-        redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
-        print(f"[AUTH WIFI] {request.client.host} -> 307: {redirect_url}")
-        return RedirectResponse(url=redirect_url, status_code=307)
+
+        if "hotspot-detect" in path:
+            print(f"[AUTH WIFI] {clientRequestUrl} -> Success")
+            return PlainTextResponse("Success", status_code=status.HTTP_200_OK)
+
+        if "connecttest" in path:
+            print(f"[AUTH WIFI] {clientRequestUrl} -> Microsoft Connect Test")
+            return PlainTextResponse("Microsoft Connect Test", status_code=status.HTTP_200_OK)
+
+        if "nmcheck" in path:
+            print(f"[AUTH WIFI] {clientRequestUrl} -> NetworkManager is online")
+            return PlainTextResponse("NetworkManager is online", status_code=status.HTTP_200_OK)
+
+    print(f"[AUTH WIFI] {clientRequestUrl} -> HTTP_307_TEMPORARY_REDIRECT: {redirect_url}")
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 #########################################################################
 
