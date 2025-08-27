@@ -280,33 +280,28 @@ def checkAuth(request: Request):
 
 @app.get("/auth-wifi/{path:path}")
 async def auth_wifi(request: Request):
+    log_info = format_request_log(request, None)
+    print(f"auth_wifi: {log_info}")
+
     orig_scheme = request.headers.get("x-original-scheme")
     orig_host = request.headers.get("x-original-host")
     target_uri = request.headers.get("X-Target-Uri")
 
     clientRequestUrl = f'{orig_scheme}://{orig_host}{request.url.path}'
 
-    log_info = format_request_log(request, None)
-    print(f"[AUTH WIFI] {log_info}")
-    print(f"[AUTH WIFI] {clientRequestUrl}")
-
     isAuth = checkAuth(request)
 
     if isAuth:
         if "Android" in request.headers.get("user-agent", ""):
-            # return 204 no content
+            print(f"[AUTH WIFI] {clientRequestUrl} --> {204}")
             return Response(status_code=status.HTTP_204_NO_CONTENT)
-        return "Success"
-
-    redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
-
-    print(f"[AUTH WIFI] {request.client.host} -> {redirect_url}")
-
-    return RedirectResponse(
-        url=redirect_url,
-        status_code=307
-    )
-
+        else:
+            print(f"[AUTH WIFI] {clientRequestUrl} --> Success")
+            return "Success"
+    else:
+        redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
+        print(f"[AUTH WIFI] {request.client.host} -> 307: {redirect_url}")
+        return RedirectResponse(url=redirect_url, status_code=307)
 
 #########################################################################
 
