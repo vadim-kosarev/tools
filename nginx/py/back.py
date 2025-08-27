@@ -6,10 +6,9 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from fastapi import Response, status
+
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.openapi.models import Response
+from fastapi import Response, status, FastAPI, Request
 from starlette.responses import RedirectResponse
 
 app = FastAPI()
@@ -274,8 +273,10 @@ async def list_requests(
 ):
     return get_filtered_requests(page, page_size, search, order, timestamp_ms)
 
+
 def checkAuth(request: Request):
     return True
+
 
 @app.get("/auth-wifi/{path:path}")
 async def auth_wifi(request: Request):
@@ -296,7 +297,6 @@ async def auth_wifi(request: Request):
             # return 204 no content
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         return "Success"
-
 
     redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
 
