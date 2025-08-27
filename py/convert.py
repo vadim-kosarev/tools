@@ -36,7 +36,7 @@ def get_codecs(file_path):
 
 
 def convert_file(src, dst, cut_first=None):
-    """Конвертирует один файл"""
+    """Конвертирует один файл и ресайзит до 480p"""
     vcodec, acodec = get_codecs(src)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
 
@@ -49,18 +49,26 @@ def convert_file(src, dst, cut_first=None):
 
     base_options.extend(["-i", src])
 
+    # Опции для ресайза видео до 480p с принудительно четными размерами
+    # scale=w:h:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2
+    scale_options = ["-vf", "scale='ceil(oh*a/2)*2:480'"]
+
     if vcodec == "h264" and acodec in ("aac", "mp3"):
-        # контейнерный ремап без перекодирования
-        cmd = ["ffmpeg"] + base_options + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", dst]
-        mode = "копирование"
-    else:
-        # полное перекодирование
-        cmd = ["ffmpeg"] + base_options + [
+        # Даже если формат подходит, нам всё равно нужно перекодировать для ресайза
+        cmd = ["ffmpeg"] + base_options + scale_options + [
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
             dst
         ]
-        mode = "перекодирование"
+        mode = "ресайз и перекодирование"
+    else:
+        # полное перекодирование
+        cmd = ["ffmpeg"] + base_options + scale_options + [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            dst
+        ]
+        mode = "перекодирование и ресайз"
 
     cut_info = f" (обрезка {cut_first} сек)" if cut_first else ""
     print(f">>> {mode}{cut_info}: {src} -> {dst}")
