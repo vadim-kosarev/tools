@@ -288,7 +288,7 @@ async def auth_wifi(request: Request):
         if "Android" in request.headers.get("user-agent", ""):
             # return 204 no content
             return Response(status_code=status.HTTP_204_NO_CONTENT)
-        return {"message": "Success"}
+        return "Success"
 
     orig_scheme = request.headers.get("x-original-scheme")
     orig_host = request.headers.get("x-original-host")
