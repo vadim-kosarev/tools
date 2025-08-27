@@ -275,7 +275,7 @@ async def list_requests(
 
 
 def checkAuth(request: Request):
-    return True
+    return False
 
 
 @app.get("/auth-wifi/{path:path}")
