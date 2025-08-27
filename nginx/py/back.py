@@ -138,16 +138,16 @@ def format_request_log(request, body):
 
 @app.get("/api/submit")
 async def process_get(request: Request):
-    return processRequest(request)
+    return process_api_request(request)
 
 
 @app.post("/api/submit")
 async def process_post(request: Request):
-    return processRequest(request)
+    return process_api_request(request)
 
 
-def processRequest(request: Request):
-    log_info = format_request_log(request, None)
+def process_api_request(request: Request):
+    # log_info = format_request_log(request, None)
 
     aFile = f"data/{datetime.now().strftime('%Y.%m.%d-%H.%M.%S')}-{request.query_params.get('phone')}.txt"
 
@@ -281,7 +281,7 @@ def checkAuth(request: Request):
 @app.get("/auth-wifi-check/{path:path}")
 async def auth_wifi_check(request: Request):
     log_info = format_request_log(request, None)
-    print(f"auth_wifi: {log_info}")
+    # print(f"auth_wifi: {log_info}")
 
     orig_scheme = request.headers.get("x-original-scheme")
     orig_host = request.headers.get("x-original-host")
