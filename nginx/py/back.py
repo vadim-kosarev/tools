@@ -292,7 +292,7 @@ async def auth_wifi(request: Request):
     isAuth = checkAuth(request)
 
     if isAuth:
-        if "Android" in request.headers.get("user-agent", ""):
+        if "_204" in request.url.path:
             print(f"[AUTH WIFI] {clientRequestUrl} --> {204}")
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         else:
