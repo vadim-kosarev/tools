@@ -279,8 +279,15 @@ def checkAuth(request: Request):
 
 @app.get("/auth-wifi/{path:path}")
 async def auth_wifi(request: Request):
+    orig_scheme = request.headers.get("x-original-scheme")
+    orig_host = request.headers.get("x-original-host")
+    target_uri = request.headers.get("X-Target-Uri")
+
+    clientRequestUrl = f'{orig_scheme}://{orig_host}{request.url.path}'
+
     log_info = format_request_log(request, None)
-    print(log_info)
+    print(f"[AUTH WIFI] {log_info}")
+    print(f"[AUTH WIFI] {clientRequestUrl}")
 
     isAuth = checkAuth(request)
 
@@ -290,9 +297,6 @@ async def auth_wifi(request: Request):
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         return "Success"
 
-    orig_scheme = request.headers.get("x-original-scheme")
-    orig_host = request.headers.get("x-original-host")
-    target_uri = request.headers.get("X-Target-Uri")
 
     redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
 
