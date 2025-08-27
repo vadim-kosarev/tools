@@ -6,9 +6,11 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from urllib.parse import urlencode
 
 import uvicorn
 from fastapi import FastAPI, Request
+from starlette.responses import RedirectResponse
 
 app = FastAPI()
 
@@ -168,7 +170,8 @@ def processRequest(request: Request):
     return {"message": phone, "token": token}
 
 
-def get_filtered_requests(page: int = 1, page_size: int = 10, search: str = None, order: str = None, timestamp_ms: int = None):
+def get_filtered_requests(page: int = 1, page_size: int = 10, search: str = None, order: str = None,
+                          timestamp_ms: int = None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
@@ -271,6 +274,35 @@ async def list_requests(
 ):
     return get_filtered_requests(page, page_size, search, order, timestamp_ms)
 
+
+@app.get("/auth-wifi/{path:path}")
+async def auth_wifi(request: Request):
+    log_info = format_request_log(request, None)
+    print(log_info)
+
+    orig_scheme = request.headers.get("x-original-scheme")
+    orig_host = request.headers.get("x-original-host")
+    orig_uri = request.headers.get("x-original-uri")
+    target_uri = request.headers.get("X-Target-Uri")
+    full_url = f"{orig_scheme}://{orig_host}{orig_uri}"
+
+    redirect_url_0 = f"{orig_scheme}://{orig_host}{target_uri}"
+    params = {
+        "origin": full_url,
+        "target": target_uri
+    }
+    encoded_params = urlencode(params)
+    redirect_url = f"{redirect_url_0}?{encoded_params}"
+
+    print(f"[AUTH WIFI] {request.client.host} -> {redirect_url}")
+
+    return RedirectResponse(
+        url=redirect_url,
+        status_code=307
+    )
+
+
+#########################################################################
 
 init_db()
 
