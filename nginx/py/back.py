@@ -274,25 +274,26 @@ async def list_requests(
 ):
     return get_filtered_requests(page, page_size, search, order, timestamp_ms)
 
+def checkAuth(request: Request):
+    return True
 
 @app.get("/auth-wifi/{path:path}")
 async def auth_wifi(request: Request):
     log_info = format_request_log(request, None)
     print(log_info)
 
+    isAuth = checkAuth(request)
+
+    if isAuth:
+        if "Android" in request.headers.get("user-agent", ""):
+            return {"message": "No Content"}, 204
+        return {"message": "Success"}
+
     orig_scheme = request.headers.get("x-original-scheme")
     orig_host = request.headers.get("x-original-host")
-    orig_uri = request.headers.get("x-original-uri")
     target_uri = request.headers.get("X-Target-Uri")
-    full_url = f"{orig_scheme}://{orig_host}{orig_uri}"
 
-    redirect_url_0 = f"{orig_scheme}://{orig_host}{target_uri}"
-    params = {
-        "origin": full_url,
-        "target": target_uri
-    }
-    encoded_params = urlencode(params)
-    redirect_url = f"{redirect_url_0}?{encoded_params}"
+    redirect_url = f"{orig_scheme}://{orig_host}{target_uri}"
 
     print(f"[AUTH WIFI] {request.client.host} -> {redirect_url}")
 
