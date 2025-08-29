@@ -359,7 +359,7 @@
 
             function updateBreadcrumb(path) {
                 const parts = path.split('/').filter(part => part !== '');
-                let breadcrumbHtml = '';
+                let breadcrumbHtml = '<a href="/www/82.html"><b>Comfort+</b></a>';
                 let currentPath = '/';
 
                 parts.forEach((part, index) => {
@@ -375,7 +375,7 @@
 
                 document.getElementById('breadcrumb').innerHTML = breadcrumbHtml;
 
-                document.querySelectorAll('#breadcrumb a').forEach(link => {
+                document.querySelectorAll('#breadcrumb a[data-path]').forEach(link => {
                     link.addEventListener('click', function(e) {
                         e.preventDefault();
                         const path = this.getAttribute('data-path');

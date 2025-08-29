@@ -238,6 +238,34 @@
             font-weight: 700;
             line-height: 1.1;
         }
+
+        /* Стиль для кнопки "для детей" */
+        .kids-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%; /* на всю ширину контейнера */
+            box-sizing: border-box; /* учитывать padding в ширине */
+            margin-top: 10px;
+            padding: 12px 15px;
+            background: #3498db; /* яркий синий цвет */
+            color: #fff;
+            font-family: Arial, sans-serif;
+            font-size: 16px;
+            text-decoration: none;
+            border-radius: 6px;
+            border: 2px solid #3498db;
+            transition: .2s;
+            box-shadow: 0 3px 8px rgba(52, 152, 219, 0.4);
+        }
+
+        .kids-btn:hover,
+        .kids-btn:focus {
+            background: #2980b9; /* более темный вариант при наведении */
+            border-color: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 12px rgba(52, 152, 219, 0.6);
+        }
     </style>
 </head>
 <body>
@@ -261,18 +289,17 @@
             </div>
         </a>
     </div>
-    <p>Оплата наличными <span class="comment">(безналичная — только если по дороге найдем интернет)</span>
+    <p>Оплата наличными <span class="comment">(безналичная — только если найдем интернет)</span>
     <ul>
         <li><b>Нижний Новгород</b>
             <span class="comment">(от Московского вокзала до...)</span>
             <ul>
                 <li>
                     <span class="strong1">до 10км</span> — <span class="strong2">750 р.</span>
-                    <br/>
+                    <!--                    <br/>-->
                     <span class="comment">
 						(ул.Рождественская,
 					ул.Ильинская,
-					пл.Сенная,
 					ул.Ванеева,
 					ул.Бекетова,
 					пр.Ленина,
@@ -282,7 +309,7 @@
                 </li>
                 <li>
                     <span class="strong1">до 25км</span> — <span class="strong2">1500 р.</span>
-                    <br/>
+                    <!--                    <br/>-->
                     <span class="comment">
 						(Аэропорт,
 					Автозавод,
@@ -300,10 +327,17 @@
     <p>Haval Jolion, детское кресло, бустер, багажник, кондиционер — всё включено</p>
     <a href="/www/media.html"
        target="_blank"
-       class="call-btn"
+       class="kids-btn"
        aria-label="Развлечения"
        alt="Развлечения">
-        <b>... для детей —></b>
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <!-- Воздушный шарик -->
+            <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"></path>
+            <path d="M10 16v4"></path>
+            <path d="M14 16v4"></path>
+            <path d="M10 20h4"></path>
+        </svg>
+        <span style="margin-left: 8px">Развлечения для детей</span>
     </a>
 
 </div>
