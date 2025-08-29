@@ -46,58 +46,62 @@
         .breadcrumb a:hover {
             text-decoration: underline;
         }
+
         .item {
             display: flex;
-            padding: 0px 1px;
-            border-bottom: 1px solid #eee;
             align-items: center;
-            margin: 0 0 2px 0;
-            line-height: 1;
-        }
-        .item:last-child {
-            margin-bottom: 0;
-        }
-        .item:hover {
-            background-color: #f8f9fa;
-        }
-        .item-icon {
-            margin-right: 10px;
-            width: 24px;
-            height: 24px;
-        }
-        .item-name {
-            flex-grow: 1;
-        }
-        .item-name a {
-            color: #0c246d;
-            text-decoration: none;
-            /*font-weight: bold;*/
-            font-size: 14pt;
-        }
-        .item-name a:hover {
-            text-decoration: underline;
-        }
-        .item-date {
-            display: none;
-        }
-        .item-size {
-            color: #666;
-            width: 100px;
-            text-align: right;
-        }
-        .folder-icon {
-            color: #ffc107;
-        }
-        .file-icon {
-            color: #6c757d;
+            gap: 10px;
+            padding: 5px 0;
+            background: 0 8px rgba(0, 0, 0, 0.1);
+            border-bottom: 3px solid #eee;
         }
 
         .item-thumbnail {
+            object-fit: cover;
             height: 80px;
             width: auto;
             margin-right: 15px;
-            object-fit: contain;
-            vertical-align: middle;
+        }
+
+        .item-name {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            flex: 1;
+        }
+
+        .first-line {
+            font-weight: bold;
+        }
+
+
+        .item:last-child {
+            margin-bottom: 0;
+        }
+
+        .item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .media-link,
+        .media-link:visited,
+        .media-link:hover,
+        .media-link:active,
+        .media-link:focus {
+            text-decoration: none;
+            color: inherit;
+            outline: none;
+        }
+
+
+        .item-link,
+        .item-link:visited,
+        .item-link:hover,
+        .item-link:active,
+        .item-link:focus {
+            text-decoration: none;
+            color: inherit;
+            outline: none;
         }
 
         .loading {
@@ -242,6 +246,8 @@
             max-height: none;
             object-fit: contain;
         }
+
+
     </style>
 </head>
 <body>
@@ -530,18 +536,21 @@
             function renderItems(items, currentPath) {
                 let html = '';
 
+                const pathParts = currentPath.split('/').filter(part => part !== '');
+                const currentDirName = pathParts.length > 0 ? decodeURIComponent(pathParts[pathParts.length - 1]) : 'Root';
+
                 // Only show parent directory link if not in the root video directory
                 if (currentPath !== '/video/' && currentPath !== '/') {
 
                     html += `
+                        <a href="#" data-path="${getParentPath(currentPath)}" class="item-link">
                         <div class="item">
-                            <a href="#" data-path="${getParentPath(currentPath)}">
                                 <img src="./images/icons/folder-up.png" class="item-thumbnail" alt="Parent directory">
-                            </a>
-                            <div class="item-name">
-                                <a href="#" data-path="${getParentPath(currentPath)}">..</a>
-                            </div>
+                                <div class="item-name">
+                                    <div class="first-line">НАЗАД...</div>
+                                </div>
                         </div>
+                        </a>
                     `;
                 }
 
@@ -550,15 +559,15 @@
                     const thumbnailPath = getThumbnailPath(item.name, item.href, 'directory');
 
                     html += `
+                        <a href="#" data-path="${currentPath + item.href}" class="item-link">
                         <div class="item">
-                            <a href="#" data-path="${currentPath + item.href}">
-                                <img src="${thumbnailPath.path}" class="item-thumbnail" alt="Folder"
-                                     onerror="this.onerror=null; this.src='${thumbnailPath.fallback}';">
-                            </a>
+                            <img src="${thumbnailPath.path}" class="item-thumbnail" alt="Folder"
+                                         onerror="this.onerror=null; this.src='${thumbnailPath.fallback}';">
                             <div class="item-name">
-                                <a href="#" data-path="${currentPath + item.href}">${nameWithoutExt}</a>
+                                <div class="first-line">${nameWithoutExt}</div>
                             </div>
                         </div>
+                        </a>
                     `;
                 });
 
@@ -578,25 +587,26 @@
                                          isAudio ? './images/icons/audio.png' : './images/icons/media.png';
 
                     html += `
-                        <div class="item" data-media="${isVideo || isAudio}">
-                            <a href="${baseUrl + currentPath + item.href}"
+                        <a href="${baseUrl + currentPath + item.href}"
                                class="media-link"
                                data-src="${baseUrl + currentPath + item.href}"
                                data-type="${fileType}"
                                data-text="${nameWithoutExt}"
                                data-skip="true"
-                               ><img src="${thumbnailPath.path}" class="item-thumbnail" alt="Media"
+                               >
+
+                        <div class="item" data-media="${isVideo || isAudio}">
+                            <img src="${thumbnailPath.path}" class="item-thumbnail" alt="Media"
                                      onerror="this.onerror=null; this.src='${thumbnailPath.fallback}';"
-                                     /></a>
+                                     />
                             <div class="item-name">
-                                <a href="${baseUrl + currentPath + item.href}"
-                                   class="media-link"
-                                   data-src="${baseUrl + currentPath + item.href}"
-                                   data-type="${fileType}"
-                                   data-text="${nameWithoutExt}"
-                                   >${nameWithoutExt}</a>
+                                <div class="first-line">${currentDirName}</div>
+                                <div class="second-line">${nameWithoutExt}</div>
                             </div>
+
                         </div>
+
+                        </a>
                     `;
                 });
 
@@ -611,9 +621,9 @@
                             </a>
                             <div class="item-name">
                                 <a href="${baseUrl + currentPath + item.href}" target="_blank">${nameWithoutExt}</a>
+                                <div class="item-date">${item.date}</div>
+                                <div class="item-size">${item.size}</div>
                             </div>
-                            <div class="item-date">${item.date}</div>
-                            <div class="item-size">${item.size}</div>
                         </div>
                     `;
                 });
