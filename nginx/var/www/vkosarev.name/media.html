@@ -592,7 +592,6 @@
                                data-src="${baseUrl + currentPath + item.href}"
                                data-type="${fileType}"
                                data-text="${nameWithoutExt}"
-                               data-skip="true"
                                >
 
                         <div class="item" data-media="${isVideo || isAudio}">
@@ -778,16 +777,27 @@
                 playerPause.style.display = 'none';
             });
 
+            // Initialize player control visibility
+            playerPlay.style.display = 'block';
             playerPause.style.display = 'none';
 
-            playerNext.addEventListener('click', playNextMedia);
-            playerPrev.addEventListener('click', playPreviousMedia);
+            // Ensure all player controls have proper event listeners
+            playerNext.addEventListener('click', function() {
+                playNextMedia();
+            });
+
+            playerPrev.addEventListener('click', function() {
+                playPreviousMedia();
+            });
+
             playerPlay.addEventListener('click', function() {
                 mediaPlayer.play();
             });
+
             playerPause.addEventListener('click', function() {
                 mediaPlayer.pause();
             });
+
             playerStop.addEventListener('click', function() {
                 mediaPlayer.pause();
                 mediaPlayer.currentTime = 0;
