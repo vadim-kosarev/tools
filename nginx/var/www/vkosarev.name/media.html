@@ -704,6 +704,12 @@
                         playMedia(mediaItem.src, mediaItem.type, mediaItem.name);
                     });
                 });
+
+                // Scroll the active item into view
+                const activeItem = playlistContainer.querySelector('.playlist-item.active');
+                if (activeItem) {
+                    activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
             }
 
             function playNextMedia() {
@@ -881,6 +887,18 @@
                     mediaPlayer.pause();
                     mediaPlayerContainer.style.display = 'none';
                     toggleExpandedMode(false);
+                }
+            });
+
+            // Handle browser back button press to close the player
+            window.addEventListener('popstate', function(event) {
+                if (mediaPlayerContainer.style.display === 'flex') {
+                    mediaPlayer.pause();
+                    mediaPlayerContainer.style.display = 'none';
+                    toggleExpandedMode(false);
+
+                    // Prevent default back behavior and update hash to current path
+                    history.pushState(null, null, '#' + currentPath);
                 }
             });
         });
