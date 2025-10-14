@@ -13,7 +13,7 @@ services:
 #      - /dev/dri/renderD128:/dev/dri/renderD128 # For intel hwaccel, needs to be updated for your hardware
     volumes:
       - ./config:/config
-      - K:/frigate:/media/frigate
+      - C:/frigate:/media/frigate
       - type: tmpfs # Optional: 1GB of memory, reduces SSD/SD Card wear
         target: /tmp/cache
         tmpfs:
@@ -24,5 +24,5 @@ services:
       - "8554:8554" # RTSP feeds
       - "8555:8555/tcp" # WebRTC over tcp
       - "8555:8555/udp" # WebRTC over udp
-    environment:
-      FRIGATE_RTSP_PASSWORD: "noname564"
+#    environment:
+#      FRIGATE_RTSP_PASSWORD: "noname564"
