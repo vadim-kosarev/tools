@@ -1,17 +1,11 @@
 mqtt:
-  enabled: false  # отключаем, если пока не используешь MQTT
+  enabled: false
 
-# ==============
-# Детекторы
-# ==============
 detectors:
   cuda:
     type: tensorrt
-    device: 0  # если несколько GPU, можешь указать 1,2 и т.д.
+    device: 0
 
-# ==============
-# Глобальные настройки
-# ==============
 ffmpeg:
   hwaccel_args:
     - -hwaccel
@@ -33,13 +27,10 @@ ffmpeg:
 detect:
   enabled: true
   max_disappeared: 25
-  fps: 10  # частота анализа
-  width: 3840  # 4K
+  fps: 10
+  width: 3840
   height: 2160
 
-# ==============
-# Настройка камеры
-# ==============
 cameras:
   yard_cam:
     ffmpeg:
@@ -66,10 +57,9 @@ cameras:
         default: 3
     motion:
       enabled: true
-      mask: []  # можно задать зоны, если нужно
+      mask: []
     objects:
       track:
-        # все классы, которые может определять модель
         - person
         - car
         - truck
@@ -86,17 +76,12 @@ cameras:
         - horse
         - airplane
 
-# ==============
-# Настройки записи и кэша
-# ==============
 record:
-  enabled: true
+  enabled: True
   retain:
-    days: 3
-  events:
-    retain:
-      default: 3
-      mode: motion
+    days: 7
+    mode: all
+
 
 snapshots:
   enabled: true
