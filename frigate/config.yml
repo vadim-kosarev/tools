@@ -1,0 +1,109 @@
+mqtt:
+  enabled: false  # отключаем, если пока не используешь MQTT
+
+# ==============
+# Детекторы
+# ==============
+detectors:
+  cuda:
+    type: tensorrt
+    device: 0  # если несколько GPU, можешь указать 1,2 и т.д.
+
+# ==============
+# Глобальные настройки
+# ==============
+ffmpeg:
+  hwaccel_args:
+    - -hwaccel
+    - cuda
+    - -hwaccel_output_format
+    - cuda
+  input_args:
+    - -avoid_negative_ts
+    - make_zero
+    - -fflags
+    - nobuffer
+    - -flags
+    - low_delay
+    - -strict
+    - experimental
+  output_args:
+    record: preset-record-generic
+
+detect:
+  enabled: true
+  max_disappeared: 25
+  fps: 10  # частота анализа
+  width: 3840  # 4K
+  height: 2160
+
+# ==============
+# Настройка камеры
+# ==============
+cameras:
+  yard_cam:
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:noname564@192.168.2.80
+          roles:
+            - detect
+            - record
+    detect:
+      enabled: true
+      width: 3840
+      height: 2160
+      fps: 10
+    record:
+      enabled: true
+      retain:
+        days: 3
+        mode: motion
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      retain:
+        default: 3
+    motion:
+      enabled: true
+      mask: []  # можно задать зоны, если нужно
+    objects:
+      track:
+        # все классы, которые может определять модель
+        - person
+        - car
+        - truck
+        - bicycle
+        - motorcycle
+        - bus
+        - dog
+        - cat
+        - bird
+        - chair
+        - backpack
+        - tv
+        - boat
+        - horse
+        - airplane
+
+# ==============
+# Настройки записи и кэша
+# ==============
+record:
+  enabled: true
+  retain:
+    days: 3
+  events:
+    retain:
+      default: 3
+      mode: motion
+
+snapshots:
+  enabled: true
+  retain:
+    default: 3
+  bounding_box: true
+  timestamp: true
+
+database:
+  path: /config/frigate.db
