@@ -48,3 +48,25 @@ services:
         "tcp", 
         "rtsp://rtsp-server:8554/live01"
         ]
+        
+        
+  stream2:
+    image: jrottenberg/ffmpeg:latest
+    container_name: ffmpeg-stream2
+    depends_on:
+      - rtsp-server
+    volumes:
+      - "./videos:/videos"
+    command: [
+        "-re", 
+        "-stream_loop", 
+        "-1", 
+        "-i", 
+        "/videos/vid002.mp4", 
+        "-f", 
+        "rtsp", 
+        "-rtsp_transport", 
+        "tcp", 
+        "rtsp://rtsp-server:8554/live02"
+        ]        
+        
