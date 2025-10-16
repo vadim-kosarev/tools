@@ -23,12 +23,29 @@ model:
 #  path: /config/yyy/yolox_m.onnx
 
 cameras:
+  cam-dbg:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://rtsp-server:8554/live01
+          roles:
+            - detect
+            - record
+            - audio
+      input_args:
+        - -rtsp_transport
+        - tcp
+      output_args:
+        detect: -f rawvideo -pix_fmt yuv420p -vf scale=1920:1080
+    detect:
+      width: 1920
+      height: 1080
+      
   cam1:
     enabled: true
     ffmpeg:
       inputs:
-        - path: 
-            rtsp://admin:noname564@192.168.2.80:554/cam/realmonitor?channel=1&subtype=0
+        - path: rtsp://admin:noname564@192.168.2.80:554/cam/realmonitor?channel=1&subtype=0
           roles:
             - detect
             - record
