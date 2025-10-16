@@ -26,3 +26,31 @@ services:
       - "8555:8555/udp" # WebRTC over udp
 #    environment:
 #      FRIGATE_RTSP_PASSWORD: "noname564"
+
+
+  rtsp-server:
+    image: bluenviron/mediamtx:latest
+    container_name: rtsp-server
+    restart: unless-stopped
+    ports:
+      - "9554:8554"
+
+  stream1:
+    image: jrottenberg/ffmpeg:latest
+    container_name: ffmpeg-stream1
+    depends_on:
+      - rtsp-server
+    volumes:
+      - "./videos:/videos"
+    command: [
+        "-re", 
+        "-stream_loop", 
+        "-1", 
+        "-i", 
+        "/videos/vid001.mp4", 
+        "-f", 
+        "rtsp", 
+        "-rtsp_transport", 
+        "tcp", 
+        "rtsp://rtsp-server:8554/live01"
+        ]
