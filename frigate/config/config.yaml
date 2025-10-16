@@ -1,0 +1,62 @@
+mqtt:
+  enabled: false
+
+
+cameras:
+  cam1:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: 
+            rtsp://admin:noname564@192.168.2.80:554/cam/realmonitor?channel=1&subtype=0
+          roles:
+            - detect
+            - record
+            - audio
+    detect:
+      enabled: true
+      width: 2560
+      height: 1440
+      fps: 10
+    motion:
+      threshold: 20
+      contour_area: 10
+      improve_contrast: true
+    zones: {}
+    review: {}
+    record:
+      enabled: True
+      retain:
+        days: 3
+        mode: motion
+      alerts:
+        retain:
+          days: 30
+          mode: motion
+      detections:
+        retain:
+          days: 30
+          mode: motion
+detect:
+  enabled: true
+motion:
+  enabled: true
+    
+version: 0.16-0
+record:
+  enabled: true
+
+semantic_search:
+  enabled: True
+  model: "jinav2"
+  model_size: large
+
+face_recognition:
+  enabled: true
+  model_size: large
+lpr:
+  enabled: true
+classification:
+  bird:
+    enabled: false
+
