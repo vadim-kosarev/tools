@@ -1,21 +1,21 @@
 mqtt:
   enabled: false
 
-#detectors:
-#  onnx_one:
-#    type: onnx
+detectors:
+  onnx_one:
+    type: onnx
 
 
 # model from https://github.com/Megvii-BaseDetection/YOLOX/tree/main/demo/ONNXRuntime
 
-#model:
-#  model_type: yolox
-#  input_tensor: nchw
-#  input_dtype: float
-#  labelmap_path: /config/yyy/coco-80.txt
-#  path: /config/yyy/yolox_nano.onnx
-#  width: 416
-#  height: 416
+model:
+  model_type: yolox
+  input_tensor: nchw
+  input_dtype: float
+  labelmap_path: /config/yyy/coco-80.txt
+  path: /config/yyy/yolox_nano.onnx
+  width: 416
+  height: 416
 
 #  path: /config/yyy/yolox_x.onnx
 #  width: 640

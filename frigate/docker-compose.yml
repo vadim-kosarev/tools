@@ -1,10 +1,12 @@
 services:
   frigate:
-    container_name: frigate
-    privileged: true
-    restart: unless-stopped
-    stop_grace_period: 30s
     image: ghcr.io/blakeblackshear/frigate:stable-tensorrt
+    container_name: frigate
+    restart: unless-stopped
+    privileged: true
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
     shm_size: "512mb"
     volumes:
       - ./config:/config
@@ -15,13 +17,10 @@ services:
           size: 1000000000
     ports:
       - "8971:8971"
-      - "5000:5000" # Internal unauthenticated access. Expose carefully.
-      - "8554:8554" # RTSP feeds
-      - "8555:8555/tcp" # WebRTC over tcp
-      - "8555:8555/udp" # WebRTC over udp
-#    environment:
-#      FRIGATE_RTSP_PASSWORD: "noname564"
-
+      - "5000:5000"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
 
   rtsp-server:
     image: bluenviron/mediamtx:latest
