@@ -1,6 +1,22 @@
 mqtt:
   enabled: false
 
+detectors:
+  onnx_one:
+    type: onnx
+
+model:
+  model_type: yolox
+  input_tensor: nchw
+  input_dtype: float
+  labelmap_path: /config/yyy/coco-80.txt
+  path: /config/yyy/yolox_nano.onnx
+  width: 416
+  height: 416
+#  path: /config/yyy/yolox_x.onnx
+#  width: 640
+#  height: 640
+#  path: /config/yyy/yolox_m.onnx
 
 cameras:
   cam1:
@@ -15,17 +31,17 @@ cameras:
             - audio
     detect:
       enabled: true
-      width: 2560
-      height: 1440
-      fps: 10
+      width: 1280
+      height: 720
+      fps: 15
     motion:
-      threshold: 20
-      contour_area: 10
+      threshold: 30
+      contour_area: 22
       improve_contrast: true
     zones: {}
     review: {}
     record:
-      enabled: True
+      enabled: true
       retain:
         days: 3
         mode: motion
@@ -39,24 +55,67 @@ cameras:
           mode: motion
 detect:
   enabled: true
+  fps: 15
+  annotation_offset: 0
+
+snapshots:
+  enabled: true
+  bounding_box: true
+
 motion:
   enabled: true
-    
-version: 0.16-0
+
 record:
   enabled: true
+  retain:
+    days: 3
+    mode: motion
+  alerts:
+    retain:
+      days: 30
+      mode: motion
+  detections:
+    retain:
+      days: 30
+      mode: motion
 
 semantic_search:
-  enabled: True
-  model: "jinav2"
+  enabled: true
+  model: jinav2
   model_size: large
 
 face_recognition:
   enabled: true
   model_size: large
+
 lpr:
   enabled: true
+
 classification:
   bird:
     enabled: false
 
+review:
+  alerts:
+    enabled: true
+    labels:
+      - person
+      - car
+      - cat
+      - dog
+  detections:
+    enabled: true
+    labels:
+      - person
+      - car
+      - cat
+      - dog
+
+version: 0.16-0
+
+objects:
+  track:
+    - person
+    - car
+    - cat
+    - dog
