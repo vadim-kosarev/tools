@@ -1,71 +1,76 @@
 mqtt:
   enabled: false
 
-#detectors:
-#  onnx_one:
-#    type: onnx
+detectors:
+ onnx_one:
+   type: onnx
+
+model:
+ model_type: yolo-generic
+ input_tensor: nchw
+ input_dtype: float
+ labelmap_path: /config/yyy/coco-80.txt
+ path: /config/onnx/yolov9t_transposed.onnx
+ width: 640
+ height: 640
 
 
-# model from https://github.com/Megvii-BaseDetection/YOLOX/tree/main/demo/ONNXRuntime
 
-#model:
-#  model_type: yolox
-#  input_tensor: nchw
-#  input_dtype: float
-#  labelmap_path: /config/yyy/coco-80.txt
-#  path: /config/yyy/yolox_nano.onnx
-#  width: 416
-#  height: 416
+
+
+
+
 
 cameras:
-  cam-dbg1:
-    enabled: true
-    ffmpeg:
-      inputs:
-        - path: rtsp://rtsp-server:8554/live01
-          roles:
-            - detect
-            - record
-            - audio
-      input_args:
-        - -rtsp_transport
-        - tcp
-      output_args:
-        detect: -f rawvideo -pix_fmt yuv420p -vf scale=1920:1080
-    detect:
-      enabled: true
-      width: 1920
-      height: 1080
-      fps: 5
 
-    motion:
-      threshold: 40
-      contour_area: 20
-      improve_contrast: true
-  cam-dbg2:
-    enabled: true
-    ffmpeg:
-      inputs:
-        - path: rtsp://rtsp-server:8554/live02
-          roles:
-            - detect
-            - record
-            - audio
-      input_args:
-        - -rtsp_transport
-        - tcp
-#      output_args:
-#        detect: -f rawvideo -pix_fmt yuv420p -vf scale=1920:1080
-    detect:
-      enabled: true
-      width: 1920
-      height: 1080
-      fps: 5
+  # cam-dbg1:
+  #   enabled: true
+  #   ffmpeg:
+  #     inputs:
+  #       - path: rtsp://rtsp-server:8554/live01
+  #         roles:
+  #           - detect
+  #           - record
+  #           - audio
+  #     input_args:
+  #       - -rtsp_transport
+  #       - tcp
+  #     output_args:
+  #       detect: -f rawvideo -pix_fmt yuv420p -vf scale=1920:1080
+  #   detect:
+  #     enabled: true
+  #     width: 1920
+  #     height: 1080
+  #     fps: 5
+  #   motion:
+  #     threshold: 40
+  #     contour_area: 20
+  #     improve_contrast: true
 
-    motion:
-      threshold: 40
-      contour_area: 20
-      improve_contrast: true
+#   cam-dbg2:
+#     enabled: false
+#     ffmpeg:
+#       inputs:
+#         - path: rtsp://rtsp-server:8554/live02
+#           roles:
+#             - detect
+#             - record
+#             - audio
+#       input_args:
+#         - -rtsp_transport
+#         - tcp
+# #      output_args:
+# #        detect: -f rawvideo -pix_fmt yuv420p -vf scale=1920:1080
+#     detect:
+#       enabled: false
+#       width: 1920
+#       height: 1080
+#       fps: 5
+#     motion:
+#       threshold: 40
+#       contour_area: 20
+#       improve_contrast: true
+
   cam1:
     enabled: true
     ffmpeg:
@@ -84,6 +89,9 @@ cameras:
       width: 1280
       height: 720
       fps: 5
+      annotation_offset: 0
+    lpr:
+      enabled: true
     motion:
       threshold: 30
       contour_area: 22
@@ -105,36 +113,284 @@ cameras:
           mode: motion
 
 
+tls:
+  enabled: false
 
 objects:
   track:
     - person
+    - bicycle
     - car
+    - motorcycle
+    - airplane
+    - bus
+    - train
+    - truck
+    - boat
+    - traffic_light
+    - fire_hydrant
+    - stop_sign
+    - parking_meter
+    - bench
+    - bird
+    - cat
+    - dog
+    - horse
+    - sheep
+    - cow
+    - elephant
+    - bear
+    - zebra
+    - giraffe
+    - backpack
+    - umbrella
+    - handbag
+    - tie
+    - suitcase
+    - frisbee
+    - skis
+    - snowboard
+    - sports_ball
+    - kite
+    - baseball_bat
+    - baseball_glove
+    - skateboard
+    - surfboard
+    - tennis_racket
+    - bottle
+    - wine_glass
+    - cup
+    - fork
+    - knife
+    - spoon
+    - bowl
+    - banana
+    - apple
+    - sandwich
+    - orange
+    - broccoli
+    - carrot
+    - hot_dog
+    - pizza
+    - donut
+    - cake
+    - chair
+    - couch
+    - potted_plant
+    - bed
+    - dining_table
+    - toilet
+    - tv
+    - laptop
+    - mouse
+    - remote
+    - keyboard
+    - cell_phone
+    - microwave
+    - oven
+    - toaster
+    - sink
+    - refrigerator
+    - book
+    - clock
+    - vase
+    - scissors
+    - teddy_bear
+    - hair_drier
+    - toothbrush
 
 review:
   alerts:
     enabled: true
     labels:
       - person
+      - bicycle
       - car
+      - motorcycle
+      - airplane
+      - bus
+      - train
+      - truck
+      - boat
+      - traffic_light
+      - fire_hydrant
+      - stop_sign
+      - parking_meter
+      - bench
+      - bird
+      - cat
+      - dog
+      - horse
+      - sheep
+      - cow
+      - elephant
+      - bear
+      - zebra
+      - giraffe
+      - backpack
+      - umbrella
+      - handbag
+      - tie
+      - suitcase
+      - frisbee
+      - skis
+      - snowboard
+      - sports_ball
+      - kite
+      - baseball_bat
+      - baseball_glove
+      - skateboard
+      - surfboard
+      - tennis_racket
+      - bottle
+      - wine_glass
+      - cup
+      - fork
+      - knife
+      - spoon
+      - bowl
+      - banana
+      - apple
+      - sandwich
+      - orange
+      - broccoli
+      - carrot
+      - hot_dog
+      - pizza
+      - donut
+      - cake
+      - chair
+      - couch
+      - potted_plant
+      - bed
+      - dining_table
+      - toilet
+      - tv
+      - laptop
+      - mouse
+      - remote
+      - keyboard
+      - cell_phone
+      - microwave
+      - oven
+      - toaster
+      - sink
+      - refrigerator
+      - book
+      - clock
+      - vase
+      - scissors
+      - teddy_bear
+      - hair_drier
+      - toothbrush
+
   detections:
     enabled: true
     labels:
       - person
+      - bicycle
       - car
+      - motorcycle
+      - airplane
+      - bus
+      - train
+      - truck
+      - boat
+      - traffic_light
+      - fire_hydrant
+      - stop_sign
+      - parking_meter
+      - bench
+      - bird
+      - cat
+      - dog
+      - horse
+      - sheep
+      - cow
+      - elephant
+      - bear
+      - zebra
+      - giraffe
+      - backpack
+      - umbrella
+      - handbag
+      - tie
+      - suitcase
+      - frisbee
+      - skis
+      - snowboard
+      - sports_ball
+      - kite
+      - baseball_bat
+      - baseball_glove
+      - skateboard
+      - surfboard
+      - tennis_racket
+      - bottle
+      - wine_glass
+      - cup
+      - fork
+      - knife
+      - spoon
+      - bowl
+      - banana
+      - apple
+      - sandwich
+      - orange
+      - broccoli
+      - carrot
+      - hot_dog
+      - pizza
+      - donut
+      - cake
+      - chair
+      - couch
+      - potted_plant
+      - bed
+      - dining_table
+      - toilet
+      - tv
+      - laptop
+      - mouse
+      - remote
+      - keyboard
+      - cell_phone
+      - microwave
+      - oven
+      - toaster
+      - sink
+      - refrigerator
+      - book
+      - clock
+      - vase
+      - scissors
+      - teddy_bear
+      - hair_drier
+      - toothbrush
 
 record:
   enabled: true
   retain:
-    days: 3
+    days: 30
     mode: motion
   alerts:
     retain:
       days: 30
-      mode: motion   # ← реагирует на любое движение
+      mode: motion
   detections:
     retain:
       days: 30
       mode: motion
 
 version: 0.16-0
+semantic_search:
+  enabled: true
+  model_size: large
+face_recognition:
+  enabled: true
+  model_size: large
+lpr:
+  enabled: true
+classification:
+  bird:
+    enabled: false
