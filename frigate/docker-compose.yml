@@ -91,5 +91,9 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - K:/postgres-data:/var/lib/postgresql/data
+      - frigate_postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
+
+volumes:
+  frigate_postgres_data:
+
