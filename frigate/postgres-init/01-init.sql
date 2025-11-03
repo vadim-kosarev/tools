@@ -3,6 +3,7 @@ ALTER SYSTEM SET timezone = 'Europe/Moscow';
 
 -- Create the frigate database
 CREATE DATABASE frigate;
+ALTER DATABASE frigate SET timezone = 'Europe/Moscow';
 
 -- Create the frigate user with password
 CREATE USER frigate WITH PASSWORD 'frigate';
