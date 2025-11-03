@@ -89,7 +89,7 @@ services:
       POSTGRES_PASSWORD: rgzz
       POSTGRES_USER: rgzz
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - K:/postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
