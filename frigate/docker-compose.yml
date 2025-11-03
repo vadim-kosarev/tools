@@ -10,7 +10,7 @@ services:
     shm_size: "512mb"
     volumes:
       - ./config:/config
-      - C:/frigate:/media/frigate
+      - K:/frigate:/media/frigate
       - type: tmpfs
         target: /tmp/cache
         tmpfs:

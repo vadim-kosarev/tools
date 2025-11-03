@@ -3,6 +3,12 @@ import onnxruntime as ort
 import numpy as np
 from pathlib import Path
 
+
+import onnx
+
+#model = onnx.load("yolov9s.onnx")
+
+
 def check_onnx_model(model_path: str):
     model_path = Path(model_path)
     if not model_path.exists():
@@ -35,6 +41,14 @@ def check_onnx_model(model_path: str):
             shape.append(dim.dim_value if dim.dim_value != 0 else "dynamic")
         dtype = out.type.tensor_type.elem_type
         print(f"  [{o}] {out.name} | dtype={dtype} | shape={shape}")
+
+
+    if model.metadata_props:
+        print("📘 Метаданные модели:")
+        for p in model.metadata_props:
+            print(f"  {p.key}: {p.value}")
+    else:
+        print("❌ Метаданных (в т.ч. имён классов) не найдено.")
 
     # --- 3️⃣ Проверка доступных провайдеров
     providers = ort.get_available_providers()
