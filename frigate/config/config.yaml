@@ -1,18 +1,24 @@
 mqtt:
-  enabled: false
+  host: mqtt
+  port: 1883
+  topic_prefix: frigate
+  user: mqtt_user
+  password: mqtt_password
+  client_id: frigate
 
-detectors:
- onnx_one:
-   type: onnx
 
-model:
- model_type: yolo-generic
- input_tensor: nchw
- input_dtype: float
- labelmap_path: /config/yyy/coco-80.txt
- path: /config/onnx/yolov9t_transposed.onnx
- width: 640
- height: 640
+# detectors:
+#  onnx_one:
+#    type: onnx
+
+# model:
+#  model_type: yolo-generic
+#  input_tensor: nchw
+#  input_dtype: float
+#  labelmap_path: /config/yyy/coco-80.txt
+#  path: /config/onnx/yolov9t_transposed.onnx
+#  width: 640
+#  height: 640
 
 
 
