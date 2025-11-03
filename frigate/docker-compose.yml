@@ -28,6 +28,17 @@ services:
     restart: unless-stopped
     ports:
       - "9554:8554"
+      
+  mqtt:
+    image: eclipse-mosquitto
+    container_name: mqtt
+    restart: unless-stopped    
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log      
 
   stream1:
     image: jrottenberg/ffmpeg:latest
