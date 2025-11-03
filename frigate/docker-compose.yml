@@ -88,6 +88,8 @@ services:
     environment:
       POSTGRES_PASSWORD: rgzz
       POSTGRES_USER: rgzz
+      POSTGRES_INITDB_ARGS: --timezone=Europe/Moscow
+      TZ: Europe/Moscow
     ports:
       - "5433:5432"
     volumes:
