@@ -96,6 +96,20 @@ services:
       - frigate_postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
 
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      JAVA_OPTS: "-Duser.timezone=Europe/Moscow"
+    ports:
+      - "3200:3000"
+    volumes:
+      - metabase_data:/metabase-data
+
 volumes:
   frigate_postgres_data:
+  metabase_data:
 

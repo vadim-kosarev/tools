@@ -77,6 +77,50 @@ cameras:
 #       contour_area: 20
 #       improve_contrast: true
 
+
+
+  cam2:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: 
+            rtsp://admin:noname564@192.168.2.14:554/stream1
+          roles:
+            - detect
+            - record
+            - audio
+      input_args:
+        - -rtsp_transport
+        - tcp
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 15
+      annotation_offset: 0
+    lpr:
+      enabled: true
+    motion:
+      threshold: 30
+      contour_area: 22
+      improve_contrast: true
+    zones: {}
+    review: {}
+    record:
+      enabled: true
+      retain:
+        days: 3
+        mode: motion
+      alerts:
+        retain:
+          days: 30
+          mode: motion
+      detections:
+        retain:
+          days: 30
+          mode: motion
+
+
   cam1:
     enabled: true
     ffmpeg:
