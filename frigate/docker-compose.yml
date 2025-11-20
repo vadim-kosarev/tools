@@ -4,10 +4,16 @@ services:
     container_name: frigate
     restart: unless-stopped
     privileged: true
-    runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
     shm_size: "512mb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ./config:/config
       - K:/frigate:/media/frigate
