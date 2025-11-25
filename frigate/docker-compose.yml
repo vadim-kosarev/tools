@@ -140,7 +140,7 @@ services:
     ports:
       - "3200:3000"
     volumes:
-      - ./metabase:/metabase-data
+      - ./metabase-data:/metabase.db
     networks: 
       - docker-network
 
