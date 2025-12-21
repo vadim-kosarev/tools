@@ -1,7 +1,10 @@
 services:
+
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   frigate:
     image: ghcr.io/blakeblackshear/frigate:stable-tensorrt
     container_name: frigate
+    hostname: frigate.rgzz
     restart: unless-stopped
     privileged: true
     environment:
@@ -13,7 +16,7 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     volumes:
       - ./config:/config
       - K:/frigate:/media/frigate
@@ -28,24 +31,28 @@ services:
       - "8555:8555/tcp"
       - "8555:8555/udp"
 
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   rtsp-server:
     image: bluenviron/mediamtx:latest
     container_name: rtsp-server
     restart: unless-stopped
     ports:
       - "9554:8554"
-      
+
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   mqtt:
+    hostname: mqtt.rgzz
     image: eclipse-mosquitto
     container_name: mqtt
-    restart: unless-stopped    
+    restart: unless-stopped
     ports:
       - "1883:1883"
     volumes:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log      
+      - ./mosquitto/log:/mosquitto/log
 
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   stream1:
     image: jrottenberg/ffmpeg:latest
     container_name: ffmpeg-stream1
@@ -54,19 +61,19 @@ services:
     volumes:
       - "./videos:/videos"
     command: [
-        "-re", 
-        "-stream_loop", 
-        "-1", 
-        "-i", 
-        "/videos/vid001.mp4", 
-        "-f", 
-        "rtsp", 
-        "-rtsp_transport", 
-        "tcp", 
-        "rtsp://rtsp-server:8554/live01"
-        ]
-        
-        
+      "-re",
+      "-stream_loop",
+      "-1",
+      "-i",
+      "/videos/vid001.mp4",
+      "-f",
+      "rtsp",
+      "-rtsp_transport",
+      "tcp",
+      "rtsp://rtsp-server:8554/live01"
+    ]
+
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   stream2:
     image: jrottenberg/ffmpeg:latest
     container_name: ffmpeg-stream2
@@ -75,19 +82,21 @@ services:
     volumes:
       - "./videos:/videos"
     command: [
-        "-re", 
-        "-stream_loop", 
-        "-1", 
-        "-i", 
-        "/videos/vid002.mp4", 
-        "-f", 
-        "rtsp", 
-        "-rtsp_transport", 
-        "tcp", 
-        "rtsp://rtsp-server:8554/live02"
-        ]
+      "-re",
+      "-stream_loop",
+      "-1",
+      "-i",
+      "/videos/vid002.mp4",
+      "-f",
+      "rtsp",
+      "-rtsp_transport",
+      "tcp",
+      "rtsp://rtsp-server:8554/live02"
+    ]
 
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   postgres:
+    hostname: postgres.rgzz
     image: postgres:16
     container_name: postgres
     restart: unless-stopped
@@ -102,7 +111,9 @@ services:
       - frigate_postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
 
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   metabase:
+    hostname: metabase.rgzz
     image: metabase/metabase:latest
     container_name: metabase
     restart: always
