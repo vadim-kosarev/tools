@@ -19,7 +19,7 @@ services:
               capabilities: [ gpu ]
     volumes:
       - ./config:/config
-      - K:/frigate:/media/frigate
+      - ${FRIGATE_MEDIA_PATH}:/media/frigate
       - type: tmpfs
         target: /tmp/cache
         tmpfs:
@@ -30,6 +30,8 @@ services:
       - "8554:8554"
       - "8555:8555/tcp"
       - "8555:8555/udp"
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   rtsp-server:
@@ -38,6 +40,8 @@ services:
     restart: unless-stopped
     ports:
       - "9554:8554"
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   mqtt:
@@ -51,6 +55,8 @@ services:
       - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   stream1:
@@ -72,6 +78,8 @@ services:
       "tcp",
       "rtsp://rtsp-server:8554/live01"
     ]
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   stream2:
@@ -93,6 +101,8 @@ services:
       "tcp",
       "rtsp://rtsp-server:8554/live02"
     ]
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   postgres:
@@ -103,13 +113,14 @@ services:
     environment:
       POSTGRES_PASSWORD: rgzz
       POSTGRES_USER: rgzz
-      POSTGRES_INITDB_ARGS: --timezone=Europe/Moscow
       TZ: Europe/Moscow
     ports:
       - "5433:5432"
     volumes:
       - frigate_postgres_data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d
+    networks:
+      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   metabase:
@@ -125,8 +136,14 @@ services:
       - "3200:3000"
     volumes:
       - metabase_data:/metabase-data
+    networks:
+      - docker-network
 
 volumes:
   frigate_postgres_data:
   metabase_data:
+  prometheus_data:
 
+networks:
+  docker-network:
+    external: true

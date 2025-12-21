@@ -6,6 +6,27 @@ mqtt:
   password: mqtt_password
   client_id: frigate
 
+# Telemetry for Prometheus
+telemetry:
+  # Network interfaces for bandwidth stats
+  network_interfaces:
+    - eth
+    - enp
+    - eno
+    - ens
+    - wl
+  # System stats configuration
+  stats:
+    # Enable AMD GPU stats
+    amd_gpu_stats: true
+    # Enable Intel GPU stats
+    intel_gpu_stats: true
+    # Enable network bandwidth stats
+    network_bandwidth: true
+  # Check for latest version
+  version_check: true
+
+
 
 # detectors:
 #  onnx_one:
@@ -19,12 +40,6 @@ mqtt:
 #  path: /config/onnx/yolov9t_transposed.onnx
 #  width: 640
 #  height: 640
-
-
-
-
-
-
 
 
 cameras:
