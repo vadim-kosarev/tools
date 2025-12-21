@@ -57,8 +57,6 @@ services:
       - ./mosquitto/log:/mosquitto/log
     networks:
       - docker-network
-    networks: 
-      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   stream1:
@@ -105,8 +103,6 @@ services:
     ]
     networks:
       - docker-network
-    networks: 
-      - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   postgres:
@@ -137,26 +133,24 @@ services:
     environment:
       JAVA_OPTS: "-Duser.timezone=Europe/Moscow"
       MB_CUSTOM_CSS: |
-            .table-image img {
-              width: 250px !important;
-              height: auto !important;
-              max-height: 250px !important;
-              object-fit: contain !important;
-            }
-            td .table-image {
-              min-width: 270px;
-              max-width: 270px;
-            }
-            /* Опционально: улучшаем вид таблицы */
-            td {
-              vertical-align: middle !important;
-            }
+        .table-image img {
+          width: 250px !important;
+          height: auto !important;
+          max-height: 250px !important;
+          object-fit: contain !important;
+        }
+        td .table-image {
+          min-width: 270px;
+          max-width: 270px;
+        }
+        /* Опционально: улучшаем вид таблицы */
+        td {
+          vertical-align: middle !important;
+        }
     ports:
       - "3200:3000"
     volumes:
       - ./metabase-data:/metabase.db
-    networks: 
-      - docker-network
     networks:
       - docker-network
 
