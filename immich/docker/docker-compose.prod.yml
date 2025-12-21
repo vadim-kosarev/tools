@@ -121,18 +121,17 @@ services:
 
   # first login uses admin/admin
   # add data source for http://immich-prometheus:9090 to get started
-  immich-grafana:
-    container_name: immich_grafana
-    command: [ './run.sh', '-disable-reporting' ]
-    ports:
-      - 3000:3000
-#    image: grafana/grafana:11.5.2-ubuntu@sha256:8b5858c447e06fd7a89006b562ba7bba7c4d5813600c7982374c41852adefaeb
-    image: grafana/grafana:latest
-    volumes:
-      - grafana-data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+#  immich-grafana:
+#    container_name: immich_grafana
+#    command: [ './run.sh', '-disable-reporting' ]
+#    ports:
+#      - 3000:3000
+#    image: grafana/grafana:latest
+#    volumes:
+#      - grafana-data:/var/lib/grafana
+#    environment:
+#      - GF_SECURITY_ADMIN_USER=admin
+#      - GF_SECURITY_ADMIN_PASSWORD=admin
 
   frpc:
     image: snowdreamtech/frpc
