@@ -142,7 +142,7 @@ services:
       - immich-server
     volumes:
       - ./frpc.ini:/etc/frp/frpc.ini
-    command: ["-c", "/etc/frp/frpc.ini"]
+    command: ["/etc/frp/frpc.ini"]
 
 
   redis-commander:
