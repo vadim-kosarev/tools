@@ -1,0 +1,8 @@
+ebooklib
+beautifulsoup4
+sentence-transformers
+faiss-cpu
+langchain
+langchain-community
+ollama
+nltk
