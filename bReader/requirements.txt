@@ -1,7 +1,7 @@
 ebooklib
 beautifulsoup4
 sentence-transformers
-faiss-cpu
+faiss-gpu
 langchain
 langchain-community
 ollama
