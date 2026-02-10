@@ -6,3 +6,4 @@ langchain
 langchain-community
 ollama
 nltk
+nltk
