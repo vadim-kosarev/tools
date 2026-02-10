@@ -1,0 +1,167 @@
+{
+  "sections": {
+    "0": {
+      "idx": 0,
+      "title": "ЧАСТЬ ПЕРВАЯ - 1",
+      "section_file": "processed_book\\sections\\0000_часть_первая_1.txt",
+      "summary_file": "processed_book\\summaries\\0000_часть_первая_1.txt",
+      "processed_at": "2026-02-10T18:26:08.536580",
+      "summary_updated_at": "2026-02-10T18:26:37.778861"
+    },
+    "1": {
+      "idx": 1,
+      "title": "ЧАСТЬ ПЕРВАЯ - 2",
+      "section_file": "processed_book\\sections\\0001_часть_первая_2.txt",
+      "summary_file": "processed_book\\summaries\\0001_часть_первая_2.txt",
+      "processed_at": "2026-02-10T18:26:08.538820",
+      "summary_updated_at": "2026-02-10T18:26:37.780437"
+    },
+    "2": {
+      "idx": 2,
+      "title": "ЧАСТЬ ПЕРВАЯ - 3",
+      "section_file": "processed_book\\sections\\0002_часть_первая_3.txt",
+      "summary_file": "processed_book\\summaries\\0002_часть_первая_3.txt",
+      "processed_at": "2026-02-10T18:26:08.542429",
+      "summary_updated_at": "2026-02-10T18:26:37.781465"
+    },
+    "3": {
+      "idx": 3,
+      "title": "ЧАСТЬ ПЕРВАЯ - 4",
+      "section_file": "processed_book\\sections\\0003_часть_первая_4.txt",
+      "summary_file": "processed_book\\summaries\\0003_часть_первая_4.txt",
+      "processed_at": "2026-02-10T18:26:08.546388",
+      "summary_updated_at": "2026-02-10T18:26:37.783329"
+    },
+    "4": {
+      "idx": 4,
+      "title": "ЧАСТЬ ПЕРВАЯ - 5",
+      "section_file": "processed_book\\sections\\0004_часть_первая_5.txt",
+      "summary_file": "processed_book\\summaries\\0004_часть_первая_5.txt",
+      "processed_at": "2026-02-10T18:26:08.548907",
+      "summary_updated_at": "2026-02-10T18:26:37.785265"
+    },
+    "5": {
+      "idx": 5,
+      "title": "ЧАСТЬ ПЕРВАЯ - 6",
+      "section_file": "processed_book\\sections\\0005_часть_первая_6.txt",
+      "summary_file": "processed_book\\summaries\\0005_часть_первая_6.txt",
+      "processed_at": "2026-02-10T18:26:08.551531",
+      "summary_updated_at": "2026-02-10T18:26:37.786494"
+    },
+    "6": {
+      "idx": 6,
+      "title": "ЧАСТЬ ПЕРВАЯ - 7",
+      "section_file": "processed_book\\sections\\0006_часть_первая_7.txt",
+      "summary_file": "processed_book\\summaries\\0006_часть_первая_7.txt",
+      "processed_at": "2026-02-10T18:26:08.554530",
+      "summary_updated_at": "2026-02-10T18:26:37.788493"
+    },
+    "7": {
+      "idx": 7,
+      "title": "ЧАСТЬ ПЕРВАЯ - 8",
+      "section_file": "processed_book\\sections\\0007_часть_первая_8.txt",
+      "summary_file": "processed_book\\summaries\\0007_часть_первая_8.txt",
+      "processed_at": "2026-02-10T18:26:08.558278",
+      "summary_updated_at": "2026-02-10T18:26:37.790301"
+    },
+    "8": {
+      "idx": 8,
+      "title": "ЧАСТЬ ПЕРВАЯ - 9",
+      "section_file": "processed_book\\sections\\0008_часть_первая_9.txt",
+      "summary_file": "processed_book\\summaries\\0008_часть_первая_9.txt",
+      "processed_at": "2026-02-10T18:26:08.562044",
+      "summary_updated_at": "2026-02-10T18:26:37.791455"
+    },
+    "9": {
+      "idx": 9,
+      "title": "ЧАСТЬ ВТОРАЯ - 1",
+      "section_file": "processed_book\\sections\\0009_часть_вторая_1.txt",
+      "summary_file": "processed_book\\summaries\\0009_часть_вторая_1.txt",
+      "processed_at": "2026-02-10T18:26:08.564602",
+      "summary_updated_at": "2026-02-10T18:26:37.793636"
+    },
+    "10": {
+      "idx": 10,
+      "title": "ЧАСТЬ ВТОРАЯ - 2",
+      "section_file": "processed_book\\sections\\0010_часть_вторая_2.txt",
+      "summary_file": "processed_book\\summaries\\0010_часть_вторая_2.txt",
+      "processed_at": "2026-02-10T18:26:08.567808",
+      "summary_updated_at": "2026-02-10T18:26:37.795525"
+    },
+    "11": {
+      "idx": 11,
+      "title": "ЧАСТЬ ВТОРАЯ - 3",
+      "section_file": "processed_book\\sections\\0011_часть_вторая_3.txt",
+      "summary_file": "processed_book\\summaries\\0011_часть_вторая_3.txt",
+      "processed_at": "2026-02-10T18:26:08.570432",
+      "summary_updated_at": "2026-02-10T18:26:37.796605"
+    },
+    "12": {
+      "idx": 12,
+      "title": "ЧАСТЬ ВТОРАЯ - 4",
+      "section_file": "processed_book\\sections\\0012_часть_вторая_4.txt",
+      "summary_file": "processed_book\\summaries\\0012_часть_вторая_4.txt",
+      "processed_at": "2026-02-10T18:26:08.574788",
+      "summary_updated_at": "2026-02-10T18:26:37.798847"
+    },
+    "13": {
+      "idx": 13,
+      "title": "ЧАСТЬ ВТОРАЯ - 5",
+      "section_file": "processed_book\\sections\\0013_часть_вторая_5.txt",
+      "summary_file": "processed_book\\summaries\\0013_часть_вторая_5.txt",
+      "processed_at": "2026-02-10T18:26:08.577753",
+      "summary_updated_at": "2026-02-10T18:26:37.800443",
+      "summary_generated_at": "2026-02-10T18:28:49.401173"
+    },
+    "14": {
+      "idx": 14,
+      "title": "ЧАСТЬ ВТОРАЯ - 6",
+      "section_file": "processed_book\\sections\\0014_часть_вторая_6.txt",
+      "summary_file": "processed_book\\summaries\\0014_часть_вторая_6.txt",
+      "processed_at": "2026-02-10T18:26:08.581471",
+      "summary_updated_at": "2026-02-10T18:26:37.802016"
+    },
+    "15": {
+      "idx": 15,
+      "title": "ЧАСТЬ ВТОРАЯ - 7",
+      "section_file": "processed_book\\sections\\0015_часть_вторая_7.txt",
+      "summary_file": "processed_book\\summaries\\0015_часть_вторая_7.txt",
+      "processed_at": "2026-02-10T18:26:08.584997",
+      "summary_updated_at": "2026-02-10T18:26:37.803240"
+    },
+    "16": {
+      "idx": 16,
+      "title": "ЧАСТЬ ВТОРАЯ - 8",
+      "section_file": "processed_book\\sections\\0016_часть_вторая_8.txt",
+      "summary_file": "processed_book\\summaries\\0016_часть_вторая_8.txt",
+      "processed_at": "2026-02-10T18:26:08.588760",
+      "summary_updated_at": "2026-02-10T18:26:37.805409"
+    },
+    "17": {
+      "idx": 17,
+      "title": "ЧАСТЬ ВТОРАЯ - 9",
+      "section_file": "processed_book\\sections\\0017_часть_вторая_9.txt",
+      "summary_file": "processed_book\\summaries\\0017_часть_вторая_9.txt",
+      "processed_at": "2026-02-10T18:26:08.591930",
+      "summary_updated_at": "2026-02-10T18:26:37.806817"
+    },
+    "18": {
+      "idx": 18,
+      "title": "ЧАСТЬ ВТОРАЯ - 10",
+      "section_file": "processed_book\\sections\\0018_часть_вторая_10.txt",
+      "summary_file": "processed_book\\summaries\\0018_часть_вторая_10.txt",
+      "processed_at": "2026-02-10T18:26:08.594886",
+      "summary_updated_at": "2026-02-10T18:26:37.809011"
+    },
+    "19": {
+      "idx": 19,
+      "title": "ЧАСТЬ ВТОРАЯ - 11",
+      "section_file": "processed_book\\sections\\0019_часть_вторая_11.txt",
+      "summary_file": "processed_book\\summaries\\0019_часть_вторая_11.txt",
+      "processed_at": "2026-02-10T18:26:08.598430",
+      "summary_updated_at": "2026-02-10T18:26:37.810877"
+    }
+  },
+  "chunks": {},
+  "source_file": "Возлюби ближнего своего.fb2"
+}

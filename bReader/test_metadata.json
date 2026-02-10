@@ -1,0 +1,13 @@
+{
+  "source_file": "test_book.fb2",
+  "sections": {
+    "0": {
+      "idx": 0,
+      "title": "Test Section 1",
+      "section_file": "test_content.txt",
+      "summary_file": null,
+      "processed_at": "2026-02-10T12:00:00"
+    }
+  },
+  "chunks": {}
+}
