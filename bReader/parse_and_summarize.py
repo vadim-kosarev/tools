@@ -1,10 +1,13 @@
 from bs4 import BeautifulSoup
 import ollama
 import os
-import json
 import logging
 import re
+import argparse
 from datetime import datetime
+from typing import Optional
+from pathlib import Path
+from metadata_manager import ParseResultCollector
 
 # Настройка логирования с таймстампом
 logging.basicConfig(
@@ -15,92 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_sections_metadata(output_dir: str) -> tuple[list, int]:
-    """Load sections metadata from file
 
-    Returns tuple of (sections_list, max_idx)
-    where max_idx is the highest index used across all sections
-    """
-    metadata_file = os.path.join(output_dir, 'sections_metadata.json')
-    max_idx = -1
-    sections_list = []
-
-    if os.path.exists(metadata_file):
-        try:
-            with open(metadata_file, 'r', encoding='utf-8') as f:
-                sections_list = json.load(f)
-                # Find maximum index across all sections
-                for section in sections_list:
-                    if 'idx' in section:
-                        max_idx = max(max_idx, section['idx'])
-        except Exception as e:
-            logger.warning(f"Could not load sections metadata: {e}")
-            sections_list = []
-            max_idx = -1
-
-    return sections_list, max_idx
-
-
-def save_sections_metadata(output_dir: str, sections_list: list) -> None:
-    """Save sections metadata to file in output_dir
-
-    Saves as JSON list of section metadata dictionaries
-    """
-    metadata_file = os.path.join(output_dir, 'sections_metadata.json')
-    try:
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(sections_list, f, ensure_ascii=False, indent=2)
-        logger.debug(f"Saved metadata for {len(sections_list)} sections")
-    except Exception as e:
-        logger.error(f"Could not save sections metadata: {e}")
-
-
-def is_section_processed(section_idx: int, output_dir: str, full_title: str = '') -> bool:
-    """Check if section has already been processed by checking for artifact files
-
-    A section is considered processed if it has:
-    - Section text file: XXXX*.txt (with or without title suffix)
-    - AND either: summary file or section is small (<5000 chars)
-
-    Returns True if all required artifacts exist, False otherwise
-    """
-    sections_dir = os.path.join(output_dir, 'sections')
-
-    # Try exact filename with title suffix first (new format)
-    if full_title:
-        unique_filename = generate_unique_filename(full_title, section_idx)
-        section_file = os.path.join(sections_dir, f'{unique_filename}.txt')
-        if os.path.exists(section_file):
-            summary_file = os.path.join(output_dir, 'summaries', f'{unique_filename}.txt')
-            try:
-                with open(section_file, 'r', encoding='utf-8') as f:
-                    content_length = len(f.read())
-                    if content_length < 5000:
-                        return True
-            except Exception:
-                return False
-            return os.path.exists(summary_file)
-
-    # Fallback: try old filename format (section_XXXX.txt)
-    section_file = os.path.join(sections_dir, f'section_{section_idx:04d}.txt')
-    summary_file = os.path.join(output_dir, 'summaries', f'section_{section_idx:04d}.txt')
-
-    if not os.path.exists(section_file):
-        # Also try new format without title suffix
-        section_file = os.path.join(sections_dir, f'{section_idx:04d}.txt')
-        if not os.path.exists(section_file):
-            return False
-        summary_file = os.path.join(output_dir, 'summaries', f'{section_idx:04d}.txt')
-
-    try:
-        with open(section_file, 'r', encoding='utf-8') as f:
-            content_length = len(f.read())
-            if content_length < 5000:
-                return True
-    except Exception:
-        return False
-
-    return os.path.exists(summary_file)
 
 
 
@@ -220,35 +138,43 @@ def generate_unique_filename(full_title: str, section_idx: int) -> str:
         return f"{section_idx:04d}"
 
 
-def process_sections_recursive(section_elem, output_dir, sections_list, section_counter, parent_title='', last_section_title=''):
-    """Recursively process section hierarchy with artifact-based deduplication
 
-    Uses numeric ID from FB2 title element instead of processing order counter.
-    Correctly handles nested sections by combining parent and child titles.
+
+def extract_sections_content(soup, metadata: ParseResultCollector, section_counter, parent_title=''):
+    """Step 1: Extract sections content from FB2 and save to files
+
+    Only extracts content and saves files, no summary generation.
+    Works recursively through section hierarchy.
 
     Args:
-        section_counter: List with next fallback index if no numeric ID found
-        last_section_title: Track previous section title to auto-increment if no title found
+        soup: BeautifulSoup parsed FB2 content
+        metadata: ParseResultCollector instance
+        section_counter: List with current section index [current_idx]
+        parent_title: Parent section title for hierarchy building
+    """
+    # Find body and process its sections
+    body = soup.find('body')
+    if body:
+        # Skip title in body and process sections
+        for child in body.children:
+            if hasattr(child, 'name') and child.name == 'section':
+                extract_section_recursive(child, metadata, section_counter, parent_title)
+    else:
+        logger.warning("No body element found in FB2 content")
+
+
+def extract_section_recursive(section_elem, metadata: ParseResultCollector, section_counter, parent_title=''):
+    """Recursively extract section content and save to files
+
+    Args:
+        section_elem: BeautifulSoup section element
+        metadata: ParseResultCollector instance
+        section_counter: List with next index [current_idx]
         parent_title: Title of parent section for building hierarchy
     """
     title = get_section_title(section_elem)
 
-    # Try to extract numeric ID from title element
-    numeric_id = get_section_numeric_id(section_elem)
-
-    # If no title, generate from previous one
-    if not title and last_section_title:
-        num = extract_numeric_suffix(last_section_title)
-        if num is not None:
-            # Extract the prefix part (everything before the number)
-            prefix_match = re.match(r'^(.+?)\s*-\s*\d+\s*$', last_section_title)
-            if prefix_match:
-                prefix = prefix_match.group(1)
-                title = f"{prefix} - {num + 1}"
-            else:
-                title = last_section_title
-
-    # Build full title only if we have a title for THIS section
+    # Build full title
     if title:
         full_title = f"{parent_title} - {title}" if parent_title else title
     else:
@@ -262,201 +188,308 @@ def process_sections_recursive(section_elem, output_dir, sections_list, section_
 
     # If there are nested sections, process them recursively
     if nested_sections:
-        current_last_title = title if title else last_section_title
         for nested_section in nested_sections:
-            # Pass current section's title as parent_title for nested sections
-            process_sections_recursive(
+            extract_section_recursive(
                 nested_section,
-                output_dir,
-                sections_list,
+                metadata,
                 section_counter,
-                full_title,  # Pass full_title as parent for proper hierarchy
-                current_last_title
+                full_title  # Pass full_title as parent for proper hierarchy
             )
-            # Update last_section_title with the processed nested section
-            nested_title = get_section_title(nested_section)
-            if nested_title:
-                current_last_title = nested_title
     else:
-        # If no nested sections, process current section as a leaf node
+        # If no nested sections and has content, save as section
         if content.strip():
-            # Always use counter for global continuous numbering
-            # Numeric IDs in source file are only used for title construction, not for actual indexing
             idx = section_counter[0]
             section_counter[0] += 1
 
-            logger.debug(f"Assigning global idx {idx} to section: '{full_title}'")
+            logger.info(f"Extracting section {idx}: '{full_title}', length: {len(content)} chars")
 
-            # Check if section already processed by artifact files
-            if is_section_processed(idx, output_dir, full_title):
-                logger.info(f"Skipping already processed section {idx}: '{full_title}'")
-                unique_filename = generate_unique_filename(full_title, idx)
-                section_file = os.path.join(output_dir, 'sections', f'{unique_filename}.txt')
-                summary_file_path = os.path.join(output_dir, 'summaries', f'{unique_filename}.txt')
-                summary_file = summary_file_path if os.path.exists(summary_file_path) else None
-                section_metadata = {
-                    'idx': idx,
-                    'title': full_title,
-                    'section_file': section_file,
-                    'summary_file': summary_file
-                }
-                sections_list.append(section_metadata)
+            # Check if section already exists in metadata
+            existing_section = metadata.get(f'sections.{idx}')
+            if existing_section:
+                logger.info(f"Section {idx} already exists in metadata, skipping extraction")
                 return
 
-            section_start_time = datetime.now()
+            # Use add_section method to save content without summary
+            section_metadata = metadata.add_section(
+                idx=idx,
+                section_title=full_title,
+                section_content=content,
+                section_summary_content=None  # No summary in step 1
+            )
 
-            logger.info(f"Processing section {idx}: '{full_title}', length: {len(content)} chars")
-
-            # Generate unique filename from title
-            unique_filename = generate_unique_filename(full_title, idx)
-
-            # Save raw section text to disk
-            section_file = os.path.join(output_dir, 'sections', f'{unique_filename}.txt')
-            with open(section_file, 'w', encoding='utf-8') as f:
-                if full_title:
-                    f.write(f"=== {full_title} ===\n\n")
-                f.write(content)
-            logger.info(f"Saved section {idx} to disk as {unique_filename}.txt")
-
-            # Generate summary if section is large (>5000 chars)
-            summary_file = None
-            if len(content) > 5000:
-                summary_start_time = datetime.now()
-                logger.info(f"Generating summary for section {idx}")
-                prompt = (f"Создай краткое содержание этого раздела книги "
-                          f"(максимум 500 слов). Фокус на сюжете, героях,"
-                          f" ключевых событиях и локациях:\n\n{content[:100000]}") # Ограничение на 100к символов для модели
-                response = ollama.chat(model='qwen2.5:14b-instruct', messages=[{'role': 'user', 'content': prompt}])
-                summary = response['message']['content']
-
-                # Save summary
-                summary_file = os.path.join(output_dir, 'summaries', f'{unique_filename}.txt')
-                with open(summary_file, 'w', encoding='utf-8') as f:
-                    if full_title:
-                        f.write(f"=== {full_title} ===\n\n")
-                    f.write(summary)
-
-                summary_duration = (datetime.now() - summary_start_time).total_seconds()
-                logger.info(f"Saved summary for section {idx} (duration: {summary_duration:.2f}s)")
-
-            # Add to metadata
-            section_metadata = {
-                'idx': idx,
-                'title': full_title,
-                'section_file': section_file,
-                'summary_file': summary_file,
-                'processed_at': datetime.now().isoformat()
-            }
-            sections_list.append(section_metadata)
-
-            # Save metadata after each new section for persistence
-            # Extract output_dir from section_file path
-            save_sections_metadata(os.path.dirname(os.path.dirname(section_file)), sections_list)
-
-            section_duration = (datetime.now() - section_start_time).total_seconds()
-            logger.info(f"Section {idx} processing completed (total duration: {section_duration:.2f}s)")
+            logger.info(f"Section {idx} content extracted and saved")
 
 
-def parse_and_summarize_fb2(file_path, output_dir='processed_book'):
-    """Parse FB2 file and generate summaries with artifact-based deduplication
+def parse_fb2_content(
+        fb2_content: str,
+        output_dir: str = 'processed_book',
+        metadata_file: Optional[str] = None,
+        source_file_path: Optional[str] = None
+) -> str:
+    """Parse FB2 content and extract sections with metadata-based processing
 
-    Uses global continuous numbering across entire book:
-    Part 1: sections 1-9
-    Part 2: sections 10-15 (continues from 9, not starts from 1)
+    Uses global continuous numbering across entire book.
+    Only works with metadata object - no file existence checks.
+
+    Args:
+        fb2_content: FB2 XML content as string
+        output_dir: Directory to save processed sections and summaries
+        metadata_file: Path to metadata file (if None, uses output_dir/sections_metadata.json)
+        source_file_path: Path to source FB2 file (optional, for metadata tracking)
+
+    Returns:
+        Path to output directory
     """
+    if metadata_file is None:
+        metadata_file = os.path.join(output_dir, 'sections_metadata.json')
+
     parse_start_time = datetime.now()
-    logger.info(f"Starting parsing FB2 file: {file_path}")
+    logger.info(f"Starting parsing FB2 content")
 
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'sections'), exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'summaries'), exist_ok=True)
 
-    # Load existing metadata from file and get max index
-    sections, max_metadata_idx = load_sections_metadata(output_dir)
-    logger.info(f"Loaded {len(sections)} sections from metadata (max idx: {max_metadata_idx})")
+    # Initialize metadata manager
+    metadata = ParseResultCollector(metadata_file, output_dir)
 
-    # Find maximum section index from actual files (for safety)
-    sections_dir = os.path.join(output_dir, 'sections')
-    existing_sections = [f for f in os.listdir(sections_dir) if f.endswith('.txt')] if os.path.exists(sections_dir) else []
+    # Set source file if provided
+    if source_file_path:
+        metadata.set_source_file(source_file_path)
 
-    max_file_idx = -1
-    last_section_title_from_disk = None
+    # Get existing sections count from metadata only
+    existing_sections = metadata.get_all_sections()
+    max_metadata_idx = -1
+    for idx_str in existing_sections.keys():
+        try:
+            idx = int(idx_str)
+            max_metadata_idx = max(max_metadata_idx, idx)
+        except (ValueError, TypeError):
+            pass
 
-    if existing_sections:
-        # Extract indices from filenames and find the maximum
-        for filename in existing_sections:
-            try:
-                # Try new format first: 0001_title.txt or 0001.txt
-                match = re.match(r'^(\d+)', filename)
-                if match:
-                    idx = int(match.group(1))
-                    max_file_idx = max(max_file_idx, idx)
-                # Fallback to old format: section_0001...
-                elif filename.startswith('section_'):
-                    match = re.match(r'section_(\d+)', filename)
-                    if match:
-                        idx = int(match.group(1))
-                        max_file_idx = max(max_file_idx, idx)
-            except ValueError:
-                pass
-
-        # Load the title of the last processed section from the file
-        if max_file_idx >= 0:
-            last_section_file = None
-            for filename in existing_sections:
-                if filename.startswith(f'{max_file_idx:04d}') or filename.startswith(f'section_{max_file_idx:04d}'):
-                    last_section_file = os.path.join(sections_dir, filename)
-                    break
-
-            if last_section_file:
-                try:
-                    with open(last_section_file, 'r', encoding='utf-8') as f:
-                        first_line = f.readline().strip()
-                        if first_line.startswith('===') and first_line.endswith('==='):
-                            last_section_title_from_disk = first_line.replace('===', '').strip()
-                except Exception as e:
-                    logger.warning(f"Could not read last section title from disk: {e}")
-
-        logger.info(f"Found {len(existing_sections)} section files (max file idx: {max_file_idx})")
-
-    # Use maximum from both metadata and files
-    max_section_idx = max(max_metadata_idx, max_file_idx)
-    logger.info(f"Using global max index: {max_section_idx}")
+    logger.info(f"Loaded {len(existing_sections)} sections from metadata (max idx: {max_metadata_idx})")
 
     # Parse FB2 as XML
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            soup = BeautifulSoup(f, 'xml')
+        soup = BeautifulSoup(fb2_content, 'xml')
     except Exception as e:
-        logger.error(f"Error parsing FB2 file: {e}")
+        logger.error(f"Error parsing FB2 content: {e}")
         raise
 
-    # section_counter starts from max global index + 1 for continuous numbering
-    section_counter = [max_section_idx + 1]
+    # section_counter starts from max metadata index + 1 for continuous numbering
+    section_counter = [max_metadata_idx + 1]
 
-    # Find body and process its sections
-    body = soup.find('body')
-    if body:
-        # Skip title in body and process sections
-        for child in body.children:
-            if hasattr(child, 'name') and child.name == 'section':
-                process_sections_recursive(child, output_dir, sections, section_counter, '', last_section_title_from_disk)
-    else:
-        logger.warning("No body element found in FB2 file")
+    # Step 1: Extract sections content and save to files
+    extract_sections_content(soup, metadata, section_counter)
 
-    # Save metadata for all sections (new + existing)
-    save_sections_metadata(output_dir, sections)
-
-    processed_count = len(sections) - len(load_sections_metadata(output_dir)[0])
-    total_sections = len(sections)
+    # Get final section count for reporting
+    final_sections = metadata.get_all_sections()
+    processed_count = len(final_sections) - len(existing_sections)
+    total_sections = len(final_sections)
     total_duration = (datetime.now() - parse_start_time).total_seconds()
-    logger.info(f"Completed processing {processed_count} new sections (total: {total_sections}). Duration: {total_duration:.2f}s")
+    logger.info(f"Completed extracting {processed_count} new sections (total: {total_sections}). Duration: {total_duration:.2f}s")
 
-    return output_dir  # Return directory for next step
+    return output_dir
+
+
+def parse_and_summarize_fb2_from_file(
+        file_path: str | Path,
+        output_dir: str = 'processed_book',
+        metadata_file: Optional[str] = None,
+        model: str = 'qwen2.5:14b-instruct'
+) -> str:
+    """Parse FB2 file, extract sections, and generate summaries
+
+    Reads FB2 file and processes it in two steps:
+    1. Extract sections content and save to files
+    2. Generate summaries for sections that need them
+
+    Args:
+        file_path: Path to FB2 file
+        output_dir: Directory to save processed sections and summaries
+        metadata_file: Path to metadata file (if None, uses output_dir/sections_metadata.json)
+        model: Ollama model to use for summary generation
+
+    Returns:
+        Path to output directory
+
+    Raises:
+        FileNotFoundError: If FB2 file not found
+    """
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"FB2 file not found: {path}")
+
+    logger.info(f"Reading FB2 file: {path}")
+    fb2_content = path.read_text(encoding='utf-8')
+
+    # Step 1: Extract sections content
+    output_dir = parse_fb2_content(
+        fb2_content=fb2_content,
+        output_dir=output_dir,
+        metadata_file=metadata_file,
+        source_file_path=str(path)
+    )
+
+    # Step 2: Generate summaries
+    if metadata_file is None:
+        metadata_file = os.path.join(output_dir, 'sections_metadata.json')
+
+    metadata = ParseResultCollector(metadata_file, output_dir)
+    summaries_generated = generate_summaries_for_sections(metadata, summary_model=model)
+
+    logger.info(f"Total processing completed. Generated {summaries_generated} summaries. Results saved to: {output_dir}")
+
+    return output_dir
+
+
+def generate_summaries_for_sections(
+        metadata: ParseResultCollector,
+        summary_model: str = 'qwen2.5:14b-instruct',
+        min_section_size: int = 5000,
+        prompt_file: str = 'prompts/summarize.txt'
+) -> int:
+    """Step 2: Generate summaries for sections that don't have them yet
+
+    Reads section files from disk and generates summaries for large sections.
+
+    Args:
+        metadata: ParseResultCollector instance
+        summary_model: Model to use for summary generation
+        min_section_size: Minimum section size to generate summary
+        prompt_file: Path to prompt template file
+
+    Returns:
+        Number of summaries generated
+    """
+    summaries_generated = 0
+    all_sections = metadata.get_all_sections()
+
+    # Load prompt template from file
+    try:
+        script_dir = Path(__file__).parent
+        prompt_path = script_dir / prompt_file
+        prompt_template = prompt_path.read_text(encoding='utf-8')
+        logger.debug(f"Loaded prompt template from {prompt_path}")
+    except Exception as e:
+        logger.error(f"Could not load prompt from {prompt_file}: {e}")
+        # Fallback to hardcoded prompt
+        prompt_template = ("Создай краткое содержание этого раздела книги "
+                          "(максимум 500 слов). Фокус на сюжете, героях, "
+                          "ключевых событиях и локациях:\n\n{content}")
+        logger.warning("Using fallback hardcoded prompt")
+
+    logger.info(f"Starting summary generation for {len(all_sections)} sections")
+
+    # Sort sections by index to process in order
+    sorted_sections = sorted(all_sections.items(), key=lambda x: int(x[0]))
+
+    for idx_str, section_meta in sorted_sections:
+        if not isinstance(section_meta, dict):
+            continue
+
+        section_idx = section_meta.get('idx')
+        section_title = section_meta.get('title', '')
+        section_file_path = section_meta.get('section_file', '')
+        existing_summary_file = section_meta.get('summary_file')
+
+        # Skip if summary already exists
+        if existing_summary_file and os.path.exists(existing_summary_file):
+            logger.debug(f"Section {section_idx} already has summary, skipping")
+            continue
+
+        # Skip if section file doesn't exist
+        if not section_file_path or not os.path.exists(section_file_path):
+            logger.warning(f"Section {section_idx} file not found: {section_file_path}")
+            continue
+
+        try:
+            # Read section content from file
+            with open(section_file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+
+            # Extract content (skip title line if present)
+            lines = file_content.split('\n')
+            if lines and lines[0].startswith('===') and lines[0].endswith('==='):
+                content = '\n'.join(lines[2:])  # Skip title and empty line
+            else:
+                content = file_content
+
+            # Check if section is large enough for summary
+            if len(content) < min_section_size:
+                logger.debug(f"Section {section_idx} too small ({len(content)} chars), skipping summary")
+                continue
+
+            # Generate summary
+            summary_start_time = datetime.now()
+            logger.info(f"Generating summary for section {section_idx}: '{section_title}'")
+
+            # Format prompt with content (limit to 100k chars)
+            prompt = prompt_template.format(content=content[:100000])
+
+            response = ollama.chat(model=summary_model, messages=[{'role': 'user', 'content': prompt}])
+            summary_content = response['message']['content']
+
+            # Save summary using metadata manager
+            success = metadata.set_section_summary_content(section_idx, summary_content)
+            if success:
+                summaries_generated += 1
+                summary_duration = (datetime.now() - summary_start_time).total_seconds()
+                logger.info(f"Generated summary for section {section_idx} (duration: {summary_duration:.2f}s)")
+
+            else:
+                logger.error(f"Failed to save summary for section {section_idx}")
+
+        except Exception as e:
+            logger.error(f"Error generating summary for section {section_idx}: {e}")
+            continue
+
+    logger.info(f"Summary generation completed. Generated {summaries_generated} summaries")
+    return summaries_generated
+
+
+
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        parse_and_summarize_fb2(sys.argv[1])
-    else:
-        print("Usage: python parse_and_summarize.py <fb2_file_path>")
+    parser = argparse.ArgumentParser(
+        description='Parse FB2 files and generate summaries',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python parse_and_summarize.py book.fb2
+  python parse_and_summarize.py book.fb2 --output processed --metafile meta.json
+  python parse_and_summarize.py book.fb2 --model llama2:7b
+  python parse_and_summarize.py book.fb2 --model gemma:7b --output results
+        '''
+    )
+    parser.add_argument('fb2_file', help='Path to FB2 file to process')
+    parser.add_argument(
+        '--output',
+        default='processed_book',
+        help='Output directory for processed sections and summaries (default: processed_book)'
+    )
+    parser.add_argument(
+        '--metafile',
+        default=None,
+        help='Path to metadata file (default: output_dir/sections_metadata.json)'
+    )
+    parser.add_argument(
+        '--model',
+        default='qwen2.5:14b-instruct',
+        help='Ollama model to use for summary generation (default: qwen2.5:14b-instruct)'
+    )
+
+    args = parser.parse_args()
+
+    try:
+        output_dir = parse_and_summarize_fb2_from_file(
+            file_path=args.fb2_file,
+            output_dir=args.output,
+            metadata_file=args.metafile,
+            model=args.model
+        )
+        logger.info(f"Processing completed. Results saved to: {output_dir}")
+    except FileNotFoundError as e:
+        logger.error(f"Error: {e}")
+        exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        exit(1)
