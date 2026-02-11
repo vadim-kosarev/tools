@@ -30,3 +30,6 @@ nginx/**/data
 *.webm
 *.mp4
 .env
+
+**/.venv/**
+.venv
