@@ -3,7 +3,6 @@ set -euo pipefail
 
 log() { echo "[/entyrpoint.sh] [$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
 
-
 retry_cmd() {
   local tries=$1; shift
   local delay=$1; shift
@@ -66,17 +65,12 @@ else
   # Включить форвардинг IPv4 (может понадобиться для клиентов)
   sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 
-  log "Starting dnsmasq"
-  dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &
-  DNSMASQ_PID=$!
-
   # Небольшая задержка чтобы интерфейс стабилизировался
   sleep 1
 
   log "Starting hostapd"
   /usr/sbin/hostapd -B /etc/hostapd/hostapd.conf || { \
     log "hostapd failed to start"; \
-    kill $DNSMASQ_PID || true; \
     exit 1; }
 
   # Проверить что интерфейс в UP и имеет IP
@@ -85,23 +79,21 @@ else
   fi
 fi
 
+log "Starting dnsmasq"
+dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &
+DNSMASQ_PID=$!
+
+cleanup() {
+  local ec=$?
+  log "Cleanup (exit code $ec) - stopping dnsmasq (PID $DNSMASQ_PID)"
+  kill "$DNSMASQ_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 log "Starting nginx"
 nginx
 
 log "Starting Python API in background"
 python3 ./back.py &
-
-#(
-#  while true; do
-#    sleep 30
-#    if pgrep hostapd >/dev/null; then
-#      continue
-#    else
-#      log "hostapd process not found";
-#      ip addr show dev "${AP_IFACE:-wlan1}" || true
-#      break
-#    fi
-#  done
-#) &
 
 tail -f /dev/null

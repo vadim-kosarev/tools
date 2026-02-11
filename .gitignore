@@ -5,6 +5,10 @@
 *.log
 *.log.*
 
+.venv/**
+.venv
+**/.venv/**
+
 
 # BlueJ files
 *.ctxt
@@ -33,3 +37,6 @@ nginx/**/data
 
 **/.venv/**
 .venv
+
+__pycache__
+**/__pycache__/**
