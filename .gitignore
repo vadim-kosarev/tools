@@ -40,3 +40,11 @@ nginx/**/data
 
 __pycache__
 **/__pycache__/**
+nginx/var/www/**
+frigate/config/**
+frigate/recordings/**
+frigate/clips/**
+frigate/database/**
+frigate/backup/**
+frigate/logs/**
+frigate/tmp/**

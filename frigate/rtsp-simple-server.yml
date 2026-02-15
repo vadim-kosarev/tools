@@ -1,0 +1,9 @@
+logLevel: info
+
+# Включаем только RTSP протоколы
+protocols: [rtsp]
+
+# Пути для потоков
+paths:
+  all:
+    source: publisher
