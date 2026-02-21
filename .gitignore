@@ -48,3 +48,4 @@ frigate/database/**
 frigate/backup/**
 frigate/logs/**
 frigate/tmp/**
+py
