@@ -5,6 +5,10 @@
 *.log
 *.log.*
 
+.venv/**
+.venv
+**/.venv/**
+
 
 # BlueJ files
 *.ctxt
@@ -26,7 +30,23 @@ hs_err_pid*
 
 *.sqlite3
 .idea
+*.iml
 nginx/**/data
 *.webm
 *.mp4
 .env
+
+**/.venv/**
+.venv
+
+__pycache__
+**/__pycache__/**
+nginx/var/www/**
+frigate/config/**
+frigate/recordings/**
+frigate/clips/**
+frigate/database/**
+frigate/backup/**
+frigate/logs/**
+frigate/tmp/**
+py
