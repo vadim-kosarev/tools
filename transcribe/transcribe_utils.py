@@ -96,7 +96,7 @@ def get_audio_duration_from_ffmpeg(input_path: Path) -> float:
     logger.debug(f"Получение длительности: {input_path.name}")
 
     duration_cmd = ["ffmpeg", "-i", str(input_path), "-f", "null", "-"]
-    logger.debug(f"Команда: {' '.join(duration_cmd)}")
+    logger.debug(f"Команда: {' '.join(f'\"{x}\"' for x in duration_cmd)}")
 
     result = subprocess.run(
         duration_cmd,
@@ -150,7 +150,7 @@ def extract_audio_from_video(video_path: Path, output_dir: Path) -> Path:
         str(audio_path)
     ]
 
-    logger.info(f"Команда: {' '.join(cmd)}")
+    logger.info(f"Команда: {' '.join(f'\"{x}\"' for x in cmd)}")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -196,7 +196,7 @@ def convert_audio_to_wav(audio_path: Path, output_dir: Path) -> Path:
         str(wav_path)
     ]
 
-    logger.info(f"Команда: {' '.join(cmd)}")
+    logger.info(f"Команда: {' '.join(f'\"{x}\"' for x in cmd)}")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -244,7 +244,7 @@ def extract_audio_chunk_with_ffmpeg(
         str(output_path)
     ]
 
-    logger.debug(f"Команда извлечения чанка: {' '.join(cmd)}")
+    logger.debug(f"Команда извлечения чанка: {' '.join(f'\"{x}\"' for x in cmd)}")
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -312,8 +312,11 @@ def cut_audio_to_chunks(
     logger.debug(f"Нарезка аудио на чанки: {input_path}")
 
     total_sec = get_audio_duration_from_ffmpeg(input_path)
-    if total_sec == 0:
-        raise RuntimeError(f"Не удалось определить длительность: {input_path}")
+
+    # Для файлов с неопределённой или очень короткой длительностью возвращаем пустой результат
+    if total_sec == 0 or total_sec < 2.0:
+        logger.warning(f"Длительность файла: {total_sec:.1f} сек - слишком мала или не определена")
+        return AudioChunkingResult(chunks=[], total_duration_sec=total_sec)
 
     tmp_dir = create_temp_directory_for_chunks()
     boundaries = calculate_chunk_boundaries(total_sec, chunk_sec, overlap_sec)

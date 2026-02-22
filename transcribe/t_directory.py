@@ -203,7 +203,7 @@ def process_single_file(
         "--device", device
     ]
 
-    logger.info(f"{' '.join(cmd)}")
+    logger.info(' '.join(f'\"{x}\"' for x in cmd))
 
     try:
         # Вывод идет напрямую в консоль в реальном времени
@@ -234,7 +234,7 @@ def process_directory(
     После каждого обработанного файла пересканирует директорию,
     чтобы всегда обрабатывать самый свежий файл (актуально для CallRec и других систем записи).
 
-    Запоминает файлы с ошибками, чтобы не зацикливаться на них.
+    Ведёт список всех попыток обработки в текущей сессии - один файл обрабатывается только один раз.
 
     Args:
         directory: Директория для обработки
@@ -248,36 +248,17 @@ def process_directory(
     """
     stats = {"total": 0, "success": 0, "failed": 0}
 
-    # Множество путей к файлам, обработка которых завершилась с ошибкой
-    # Используем множество для быстрой проверки принадлежности
-    failed_files = set()
-
-    # Инициализация: сканируем директорию для поиска файлов со статусом FAILED
-    # (пустые транскрипции = ошибка обработки)
-    logger.info("Проверка наличия файлов с ошибками обработки...")
-    initial_scan = collect_media_files(directory, skip_existing=False, revision=revision)
-
-    failed_count = 0
-    for file_path in initial_scan:
-        status = get_transcription_status(file_path, revision)
-        if status == TranscriptionStatus.FAILED:
-            failed_files.add(file_path)
-            failed_count += 1
-            logger.debug(f"Файл со статусом FAILED добавлен в failed_files: {file_path.name}")
-
-    if failed_count > 0:
-        logger.warning(
-            f"Обнаружено файлов с ошибками обработки: {failed_count}\n"
-            f"Эти файлы будут пропущены (имеют пустые транскрипции)"
-        )
+    # Множество путей ко ВСЕМ файлам, которые мы пытались обработать в этой сессии
+    # Один файл = одна попытка, независимо от результата
+    processed_files = set()
 
     # Цикл с динамическим пересканированием
     while True:
         # Пересканируем директорию для поиска необработанных файлов
         media_files = collect_media_files(directory, skip_existing, revision)
 
-        # Фильтруем файлы с ошибками - не пытаемся обрабатывать их повторно
-        media_files = [f for f in media_files if f not in failed_files]
+        # Фильтруем файлы, которые уже пытались обработать в этой сессии
+        media_files = [f for f in media_files if f not in processed_files]
 
         if not media_files:
             # Нет больше файлов для обработки
@@ -285,16 +266,14 @@ def process_directory(
                 logger.info("Нет файлов для обработки")
             else:
                 logger.info("Все файлы обработаны")
-                if failed_files:
-                    logger.warning(
-                        f"Пропущено файлов с ошибками: {len(failed_files)}\n"
-                        f"Эти файлы не были обработаны повторно, чтобы избежать зацикливания"
-                    )
             break
 
         # Берём ПЕРВЫЙ файл из отсортированного списка (самый свежий)
         file_path = media_files[0]
         stats["total"] += 1
+
+        # Запоминаем, что пытаемся обработать этот файл
+        processed_files.add(file_path)
 
         logger.info(
             f"\n{'=' * 80}\n"
@@ -308,12 +287,9 @@ def process_directory(
             stats["success"] += 1
         else:
             stats["failed"] += 1
-            # Запоминаем файл с ошибкой, чтобы не обрабатывать его повторно
-            failed_files.add(file_path)
-            logger.debug(f"Файл добавлен в список проваленных: {file_path.name}")
 
         # После обработки файла цикл повторится и пересканирует директорию
-        # Это позволяет обрабатывать новые файлы, появившиеся во время работы
+        # Файл уже в processed_files, поэтому не будет обработан повторно
 
     return stats
 
