@@ -20,9 +20,15 @@ import sys
 from pathlib import Path
 from typing import List
 import subprocess
+from enum import Enum
 
-# Импорт функций для работы с транскрипциями
-from transcribe_utils import find_existing_transcription
+
+
+class TranscriptionStatus(Enum):
+    """Статус транскрипции файла"""
+    NOT_ATTEMPTED = "not_attempted"      # Не пытались обрабатывать
+    FAILED = "failed"                     # Пытались, но неудачно (пустой файл)
+    SUCCESS = "success"                   # Есть успешный результат
 
 # ============================================================================
 # Настройка логирования
@@ -55,21 +61,55 @@ def is_media_file(file_path: Path) -> bool:
     return file_path.suffix.lower() in MEDIA_EXTENSIONS
 
 
-def has_transcription(file_path: Path, revision: str) -> bool:
+def get_transcription_status(file_path: Path, revision: str) -> TranscriptionStatus:
     """
-    Проверяет, существует ли уже транскрипция для файла с любым суффиксом.
+    Проверяет статус транскрипции файла.
 
     Args:
         file_path: Путь к медиафайлу
         revision: Используемая ревизия модели
 
     Returns:
-        True если найдена транскрипция с любым суффиксом (speakers, blocks, simple)
-        и она имеет ненулевой размер
+        TranscriptionStatus:
+            - NOT_ATTEMPTED: Нет файла транскрипции (не пытались обрабатывать)
+            - FAILED: Есть файл, но он пустой (0 байт) - ошибка обработки
+            - SUCCESS: Есть файл с содержимым - успешная транскрипция
     """
-    # Используем общую функцию поиска транскрипции
-    transcription_path = find_existing_transcription(file_path, revision)
-    return transcription_path is not None
+    stem = file_path.stem
+    parent = file_path.parent
+
+    # Паттерн поиска: <имя>.gigaam-<revision>-*.txt
+    pattern = f"{stem}.gigaam-{revision}-*.txt"
+    matching_files = list(parent.glob(pattern))
+
+    if not matching_files:
+        # Нет файлов транскрипции
+        return TranscriptionStatus.NOT_ATTEMPTED
+
+    # Проверяем найденные файлы
+    has_empty = False
+    has_non_empty = False
+
+    for transcription_path in matching_files:
+        try:
+            file_size = transcription_path.stat().st_size
+            if file_size == 0:
+                has_empty = True
+            else:
+                has_non_empty = True
+        except OSError:
+            continue
+
+    # Приоритет: если есть хотя бы один непустой файл - SUCCESS
+    if has_non_empty:
+        return TranscriptionStatus.SUCCESS
+
+    # Если есть только пустые файлы - FAILED
+    if has_empty:
+        return TranscriptionStatus.FAILED
+
+    # Файлы есть, но недоступны (OSError) - считаем как NOT_ATTEMPTED
+    return TranscriptionStatus.NOT_ATTEMPTED
 
 
 def collect_media_files(
@@ -100,10 +140,13 @@ def collect_media_files(
         if not is_media_file(file_path):
             continue
 
-        if skip_existing and has_transcription(file_path, revision):
-            logger.debug(f"Пропущен (транскрипция существует): {file_path.name}")
-            skipped_count += 1
-            continue
+        if skip_existing:
+            status = get_transcription_status(file_path, revision)
+            if status == TranscriptionStatus.SUCCESS:
+                # Пропускаем только успешно обработанные файлы
+                logger.debug(f"Пропущен (успешная транскрипция): {file_path.name}")
+                skipped_count += 1
+                continue
 
         media_files.append(file_path)
 
@@ -186,7 +229,12 @@ def process_directory(
         t_gigaam_script: Path
 ) -> dict:
     """
-    Обрабатывает все медиафайлы в директории.
+    Обрабатывает все медиафайлы в директории с динамическим пересканированием.
+
+    После каждого обработанного файла пересканирует директорию,
+    чтобы всегда обрабатывать самый свежий файл (актуально для CallRec и других систем записи).
+
+    Запоминает файлы с ошибками, чтобы не зацикливаться на них.
 
     Args:
         directory: Директория для обработки
@@ -198,16 +246,61 @@ def process_directory(
     Returns:
         Словарь со статистикой обработки
     """
-    media_files = collect_media_files(directory, skip_existing, revision)
+    stats = {"total": 0, "success": 0, "failed": 0}
 
-    if not media_files:
-        logger.info("Нет файлов для обработки")
-        return {"total": 0, "success": 0, "failed": 0}
+    # Множество путей к файлам, обработка которых завершилась с ошибкой
+    # Используем множество для быстрой проверки принадлежности
+    failed_files = set()
 
-    stats = {"total": len(media_files), "success": 0, "failed": 0}
+    # Инициализация: сканируем директорию для поиска файлов со статусом FAILED
+    # (пустые транскрипции = ошибка обработки)
+    logger.info("Проверка наличия файлов с ошибками обработки...")
+    initial_scan = collect_media_files(directory, skip_existing=False, revision=revision)
 
-    for idx, file_path in enumerate(media_files, 1):
-        logger.info(f"\n[{idx}/{stats['total']}] Обработка файла...")
+    failed_count = 0
+    for file_path in initial_scan:
+        status = get_transcription_status(file_path, revision)
+        if status == TranscriptionStatus.FAILED:
+            failed_files.add(file_path)
+            failed_count += 1
+            logger.debug(f"Файл со статусом FAILED добавлен в failed_files: {file_path.name}")
+
+    if failed_count > 0:
+        logger.warning(
+            f"Обнаружено файлов с ошибками обработки: {failed_count}\n"
+            f"Эти файлы будут пропущены (имеют пустые транскрипции)"
+        )
+
+    # Цикл с динамическим пересканированием
+    while True:
+        # Пересканируем директорию для поиска необработанных файлов
+        media_files = collect_media_files(directory, skip_existing, revision)
+
+        # Фильтруем файлы с ошибками - не пытаемся обрабатывать их повторно
+        media_files = [f for f in media_files if f not in failed_files]
+
+        if not media_files:
+            # Нет больше файлов для обработки
+            if stats["total"] == 0:
+                logger.info("Нет файлов для обработки")
+            else:
+                logger.info("Все файлы обработаны")
+                if failed_files:
+                    logger.warning(
+                        f"Пропущено файлов с ошибками: {len(failed_files)}\n"
+                        f"Эти файлы не были обработаны повторно, чтобы избежать зацикливания"
+                    )
+            break
+
+        # Берём ПЕРВЫЙ файл из отсортированного списка (самый свежий)
+        file_path = media_files[0]
+        stats["total"] += 1
+
+        logger.info(
+            f"\n{'=' * 80}\n"
+            f"[{stats['total']}] Обработка файла (осталось необработанных: {len(media_files)})...\n"
+            f"{'=' * 80}"
+        )
 
         success = process_single_file(file_path, revision, device, t_gigaam_script)
 
@@ -215,6 +308,12 @@ def process_directory(
             stats["success"] += 1
         else:
             stats["failed"] += 1
+            # Запоминаем файл с ошибкой, чтобы не обрабатывать его повторно
+            failed_files.add(file_path)
+            logger.debug(f"Файл добавлен в список проваленных: {file_path.name}")
+
+        # После обработки файла цикл повторится и пересканирует директорию
+        # Это позволяет обрабатывать новые файлы, появившиеся во время работы
 
     return stats
 
