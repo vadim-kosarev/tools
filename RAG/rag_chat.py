@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     chunk_size: int = 1500
     chunk_overlap: int = 300
     retriever_top_k: int = 10
+    retriever_score_threshold: float = 0.0   # 0.0 = отключено; рекомендуемое значение ~0.3
+    max_context_chars: int = 60_000          # максимальный размер контекста для LLM (~40K токенов)
     regex_context_lines: int = 5  # строк контекста вокруг regex-совпадения
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
@@ -233,13 +235,17 @@ _MIN_CHUNK_LEN = 20  # минимальная длина текста чанка
 
 
 def _is_valid_chunk(doc: Document) -> bool:
-    """Проверяет, что чанк пригоден для создания эмбеддинга."""
+    """
+    Проверяет, что чанк пригоден для создания эмбеддинга.
+    Намеренно мягкий фильтр — отсекает только полностью пустые/бессмысленные чанки,
+    чтобы не потерять таблицы с IP-адресами и числовыми данными.
+    """
     text = doc.page_content.strip()
     if len(text) < _MIN_CHUNK_LEN:
         return False
-    # Отфильтровываем чанки, состоящие только из спецсимволов/разделителей
-    printable_ratio = sum(1 for c in text if c.isalnum()) / max(len(text), 1)
-    return printable_ratio >= 0.1
+    # Отфильтровываем чанки из одних спецсимволов (разделители, линии)
+    alnum_count = sum(1 for c in text if c.isalnum())
+    return alnum_count >= 3
 
 
 def _add_batch_safe(store: Chroma, batch: list[Document]) -> int:

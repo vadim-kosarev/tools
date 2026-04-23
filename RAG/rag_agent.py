@@ -23,8 +23,8 @@ Agentic RAG-чат по документации СОИБ КЦОИ.
 import re
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel
 from langchain_core.documents import Document
@@ -41,6 +41,51 @@ from rag_chat import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Утилита: стриппинг <think>...</think> блоков (qwen3 и аналоги)
+# ---------------------------------------------------------------------------
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think_tags(text: str) -> str:
+    """Удаляет <think>...</think> блоки из ответа LLM (qwen3, deepseek-r1 и др.)."""
+    return _THINK_RE.sub("", text).strip()
+
+
+# ---------------------------------------------------------------------------
+# Pre-analysis: авто-детектирование точных значений в вопросе
+# (до LLM, детерминированно, через regex)
+# ---------------------------------------------------------------------------
+
+# Паттерны для авто-детектирования конкретных значений в вопросе пользователя
+_PREANALYSIS_PATTERNS: list[tuple[str, str]] = [
+    # (название, regex для поиска в вопросе, regex для поиска в документах)
+    ("IPv4",        r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?\b"),
+    ("FQDN/host",   r"\b(?:[a-zA-Z0-9-]+\.){2,}[a-zA-Z]{2,}\b"),
+    ("doc_number",  r"\b[А-ЯA-Z]{2,}-\d+(?:\.\d+)*\b"),
+    ("hex_code",    r"\b0x[0-9A-Fa-f]{4,}\b"),
+    ("port",        r"(?:порт|port)\s*:?\s*(\d{2,5})\b"),
+    ("vlan",        r"(?:vlan|влан)\s*:?\s*(\d+)\b"),
+]
+
+
+def extract_exact_values(question: str) -> list[tuple[str, str]]:
+    """
+    Детерминированно извлекает из вопроса точные значения (IP, FQDN, коды документов и т.д.).
+    Возвращает список (тип, regex_паттерн_для_документов).
+    """
+    found: list[tuple[str, str]] = []
+    for name, pattern in _PREANALYSIS_PATTERNS:
+        for match in re.finditer(pattern, question, re.IGNORECASE):
+            value = match.group(0).strip()
+            # Для поиска в документах — экранируем точки в IP/FQDN
+            doc_pattern = re.escape(value)
+            found.append((name, doc_pattern))
+            logger.debug(f"Pre-analysis: найдено {name} = '{value}' → regex: '{doc_pattern}'")
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +175,11 @@ def analyze_query(llm: ChatOllama, question: str) -> QueryAnalysis:
     logger.debug(f"Анализируем запрос: {question}")
     raw = chain.invoke({"question": question})
 
+    # Стрипаем <think>...</think> блоки qwen3/deepseek-r1 перед парсингом JSON
+    clean = _strip_think_tags(raw)
+
     # Извлекаем JSON из ответа (LLM иногда добавляет лишнее)
-    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+    json_match = re.search(r'\{.*\}', clean, re.DOTALL)
     if not json_match:
         logger.warning(f"LLM вернул не-JSON при анализе запроса, используем fallback\nRaw: {raw[:300]}")
         return QueryAnalysis(
@@ -170,49 +218,91 @@ def multi_retrieve(
     vectorstore,
     analysis: QueryAnalysis,
     knowledge_dir: Path,
+    forced_regex: list[tuple[str, str]] | None = None,
 ) -> list[Document]:
     """
-    Шаг 2: Выполняет N семантических поисков по всем перефразировкам
-    + regex-поиск если нужен. Дедуплицирует результаты по содержимому.
+    Шаг 2: Выполняет N семантических поисков по всем перефразировкам параллельно
+    (ThreadPoolExecutor) + regex-поиск (из плана LLM + принудительные из pre-analysis).
+    Дедуплицирует результаты по содержимому.
+
+    Семантический поиск использует score_threshold если задан в settings
+    (settings.retriever_score_threshold > 0).
+
+    Args:
+        forced_regex: список (тип, паттерн) из pre-analysis — выполняется всегда,
+                      независимо от решения LLM.
     """
-    retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": settings.retriever_top_k},
-    )
+    search_kwargs: dict = {"k": settings.retriever_top_k}
+    if settings.retriever_score_threshold > 0:
+        retriever = vectorstore.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={**search_kwargs, "score_threshold": settings.retriever_score_threshold},
+        )
+    else:
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs=search_kwargs,
+        )
 
     seen: set[str] = set()
     all_docs: list[Document] = []
 
-    # Семантические поиски по каждой перефразировке
-    for query in analysis.search_queries:
+    # Параллельные семантические поиски по всем перефразировкам
+    def _search(query: str) -> tuple[str, list[Document]]:
         logger.debug(f"Semantic search: {query}")
-        docs = retriever.invoke(query)
-        for doc in docs:
-            key = doc.page_content[:200]
+        return query, retriever.invoke(query)
+
+    with ThreadPoolExecutor(max_workers=len(analysis.search_queries)) as executor:
+        futures = {executor.submit(_search, q): q for q in analysis.search_queries}
+        for future in as_completed(futures):
+            try:
+                _, docs = future.result()
+                for doc in docs:
+                    key = doc.page_content[:200]
+                    if key not in seen:
+                        seen.add(key)
+                        all_docs.append(doc)
+            except Exception as exc:
+                logger.warning(f"Ошибка семантического поиска: {exc}")
+
+    # Принудительные regex-паттерны из pre-analysis (IP, FQDN, коды)
+    forced = forced_regex or []
+    for kind, pattern in forced:
+        logger.debug(f"Forced regex [{kind}]: {pattern}")
+        result = regex_search(pattern, knowledge_dir)
+        for match in result.matches:
+            content = f"[regex:{kind} match={match.match}]\n{match.context}"
+            key = content[:200]
             if key not in seen:
                 seen.add(key)
-                all_docs.append(doc)
+                all_docs.append(Document(
+                    page_content=content,
+                    metadata={"source": match.file, "section": f"regex:{kind}"},
+                ))
 
-    # Regex-поиск если запрошен
-    if analysis.regex_patterns:
-        for pattern in analysis.regex_patterns:
-            result = regex_search(pattern, knowledge_dir)
-            # Конвертируем совпадения в Document для единого контекста
-            for match in result.matches[:30]:  # ограничиваем топ-30
-                content = f"[regex match: {match.match}]\n{match.context}"
-                key = content[:200]
-                if key not in seen:
-                    seen.add(key)
-                    all_docs.append(Document(
-                        page_content=content,
-                        metadata={"source": match.file, "section": "regex-match"},
-                    ))
+    # Дополнительные regex из плана LLM (если не дублируют принудительные)
+    forced_patterns = {p for _, p in forced}
+    for pattern in analysis.regex_patterns:
+        if pattern in forced_patterns:
+            continue
+        result = regex_search(pattern, knowledge_dir)
+        for match in result.matches[:30]:
+            content = f"[regex match: {match.match}]\n{match.context}"
+            key = content[:200]
+            if key not in seen:
+                seen.add(key)
+                all_docs.append(Document(
+                    page_content=content,
+                    metadata={"source": match.file, "section": "regex-match"},
+                ))
 
     logger.info(
         f"Поиск завершён\n"
         f"  Уникальных чанков: {len(all_docs)}\n"
-        f"  Из {len(analysis.search_queries)} семантических запросов"
-        + (f" + {len(analysis.regex_patterns)} regex" if analysis.regex_patterns else "")
+        f"  Семантических запросов (параллельно): {len(analysis.search_queries)}\n"
+        f"  Forced regex (pre-analysis): {len(forced)}\n"
+        f"  LLM regex: {len(analysis.regex_patterns)}\n"
+        f"  Score threshold: {settings.retriever_score_threshold or 'off'}"
     )
     return all_docs
 
@@ -224,21 +314,45 @@ def synthesize_answer(
 ) -> tuple[str, list[str]]:
     """
     Шаг 3: LLM синтезирует финальный ответ из найденных чанков.
+
+    Контекст обрезается до settings.max_context_chars символов — сначала по
+    числу чанков, чтобы не превысить окно контекста LLM.
+
     Возвращает (answer_text, source_files).
     """
     context_parts = []
-    for doc in docs:
+    total_chars = 0
+    truncated_at: int | None = None
+
+    for i, doc in enumerate(docs):
         src = doc.metadata.get("source", "?")
         section = doc.metadata.get("section", "")
         header = f"[{src}]" + (f" — {section}" if section else "")
-        context_parts.append(f"{header}\n{doc.page_content}")
-    context = "\n\n---\n\n".join(context_parts)
+        chunk = f"{header}\n{doc.page_content}"
+        chunk_len = len(chunk)
 
-    sources = list({doc.metadata.get("source", "?") for doc in docs})
+        if settings.max_context_chars > 0 and total_chars + chunk_len > settings.max_context_chars:
+            truncated_at = i
+            break
+
+        context_parts.append(chunk)
+        total_chars += chunk_len
+
+    if truncated_at is not None:
+        logger.warning(
+            f"Контекст обрезан: использовано {truncated_at} из {len(docs)} чанков "
+            f"({total_chars:,} / {settings.max_context_chars:,} символов)"
+        )
+
+    context = "\n\n---\n\n".join(context_parts)
+    sources = list({doc.metadata.get("source", "?") for doc in docs[:truncated_at or len(docs)]})
 
     prompt = ChatPromptTemplate.from_template(_SYNTHESIS_PROMPT)
     chain = prompt | llm | StrOutputParser()
     answer = chain.invoke({"context": context, "question": question})
+
+    # Убираем <think> блоки из финального ответа
+    answer = _strip_think_tags(answer)
 
     return answer, sources
 
@@ -255,15 +369,25 @@ def agent_ask(
 ) -> AgentAnswer:
     """
     Полный агентный цикл:
-    1. analyze_query  — LLM строит план поиска
-    2. multi_retrieve — N семантических + regex поисков с дедупликацией
+    0. extract_exact_values — pre-analysis: детерминированно извлекает точные значения
+       (IP, FQDN, коды документов) из вопроса — до LLM, гарантированно
+    1. analyze_query  — LLM строит план поиска (перефразировки + regex)
+    2. multi_retrieve — N семантических + forced regex + LLM regex, дедупликация
     3. synthesize_answer — LLM формирует финальный ответ
     """
-    # Шаг 1: анализ
+    # Шаг 0: детерминированный pre-analysis (не зависит от LLM)
+    forced_regex = extract_exact_values(question)
+    if forced_regex:
+        logger.info(
+            f"Pre-analysis: найдено {len(forced_regex)} точных значений → принудительный regex\n"
+            + "\n".join(f"  [{kind}] {pat}" for kind, pat in forced_regex)
+        )
+
+    # Шаг 1: LLM-анализ
     analysis = analyze_query(llm, question)
 
     # Шаг 2: поиск
-    docs = multi_retrieve(vectorstore, analysis, knowledge_dir)
+    docs = multi_retrieve(vectorstore, analysis, knowledge_dir, forced_regex=forced_regex)
 
     # Шаг 3: синтез
     answer, sources = synthesize_answer(llm, question, docs)
@@ -284,6 +408,52 @@ def agent_ask(
 
 # ---------------------------------------------------------------------------
 # Вывод
+# ---------------------------------------------------------------------------
+
+def extract_all_ips(knowledge_dir: Path, output_file: Path | None = None) -> int:
+    """
+    Извлекает все уникальные IP-адреса и подсети из документов.
+    Сортирует по октетам. Если output_file указан — сохраняет в файл.
+    Возвращает количество уникальных IP.
+    """
+
+    result = regex_search(r'\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b', knowledge_dir)
+
+    ip_map: dict[str, set[str]] = {}
+    for m in result.matches:
+        ip = m.match
+        if ip not in ip_map:
+            ip_map[ip] = set()
+        ip_map[ip].add(m.file)
+
+    def _sort_key(ip: str) -> tuple:
+        clean = ip.split('/')[0]
+        parts = clean.split('.')
+        try:
+            return tuple(int(p) for p in parts)
+        except ValueError:
+            return (999, 999, 999, 999)
+
+    sorted_ips = sorted(ip_map.keys(), key=_sort_key)
+
+    lines = [f"Уникальных IP/подсетей: {len(sorted_ips)}\n"]
+    for ip in sorted_ips:
+        files = ', '.join(sorted(ip_map[ip]))
+        lines.append(f"{ip:22}  [{files}]")
+
+    content = "\n".join(lines)
+
+    if output_file:
+        output_file.write_text(content, encoding="utf-8")
+        logger.info(f"Список IP сохранён в {output_file} ({len(sorted_ips)} записей)")
+    else:
+        print(content)
+
+    return len(sorted_ips)
+
+
+# ---------------------------------------------------------------------------
+# Вывод агентного ответа
 # ---------------------------------------------------------------------------
 
 def print_agent_answer(result: AgentAnswer) -> None:
@@ -309,7 +479,8 @@ def run_interactive_chat(vectorstore, llm: ChatOllama, knowledge_dir: Path) -> N
     """Интерактивный агентный чат с отображением плана поиска."""
     print(f"\n{SEP}")
     print("Agentic RAG-чат по документации СОИБ КЦОИ")
-    print("  Каждый запрос: анализ → план → N поисков → синтез")
+    print("  Обычный вопрос     → анализ → план → N поисков → синтез")
+    print("  ips [файл]         → список всех IP из документов")
     print("  exit / quit / выход → выйти")
     print(f"{SEP}\n")
 
@@ -326,6 +497,13 @@ def run_interactive_chat(vectorstore, llm: ChatOllama, knowledge_dir: Path) -> N
             print("До свидания!")
             break
 
+        # Команда: ips [output_file]
+        if question.lower().startswith("ips"):
+            parts = question.split(maxsplit=1)
+            out = Path(parts[1]) if len(parts) > 1 else None
+            extract_all_ips(knowledge_dir, output_file=out)
+            continue
+
         result = agent_ask(vectorstore, llm, question, knowledge_dir)
         print_agent_answer(result)
 
@@ -340,6 +518,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Agentic RAG-чат по документации СОИБ КЦОИ")
     parser.add_argument("question", nargs="*", help="Вопрос (если не указан — интерактивный режим)")
+    parser.add_argument("--ips", metavar="FILE", nargs="?", const="", help="Извлечь все IP из документов (опционально: путь к файлу)")
     args = parser.parse_args()
 
     logger.info(
@@ -351,6 +530,13 @@ def main() -> None:
     )
 
     knowledge_dir = Path(settings.knowledge_dir)
+
+    # Режим извлечения IP — не требует LLM/vectorstore
+    if args.ips is not None:
+        out_file = Path(args.ips) if args.ips else None
+        extract_all_ips(knowledge_dir, output_file=out_file)
+        return
+
     vectorstore = build_vectorstore(force_reindex=False)
     llm = rag_chat.build_llm()
 
