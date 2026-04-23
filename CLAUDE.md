@@ -100,6 +100,8 @@ class ApiResponse(BaseModel):
 ### Основные параметры
 - **IDE:** JetBrains IDEA
 - **Shell:** PowerShell (Windows) - команды для run_in_terminal должны быть PowerShell-совместимыми. ОСЬ - Windows.
+- для новых терминалов, используемых агентом нужно вызывать команду
+   ```chcp 65001 ; $env:PYTHONIOENCODING = 'utf-8'``` - только один раз на терминал, не каждый раз перед командой
 
 ### PowerShell команды (важно!)
 При использовании `run_in_terminal` tool:
