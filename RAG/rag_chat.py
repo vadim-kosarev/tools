@@ -25,8 +25,16 @@ RAG-чат по документации СОИБ КЦОИ.
 import re
 import logging
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional
+
+# Принудительно переключаем stdout/stderr на UTF-8 — иначе кириллица
+# в логах отображается иероглифами в PowerShell (cp866/cp1251 по умолчанию)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 import chromadb
 from dotenv import load_dotenv
@@ -46,6 +54,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+# Подавляем избыточные HTTP-логи от httpx/httpcore (используются внутри Ollama и ChromaDB клиентов)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +77,10 @@ class Settings(BaseSettings):
     retriever_top_k: int = 10
     retriever_score_threshold: float = 0.0   # 0.0 = отключено; рекомендуемое значение ~0.3
     max_context_chars: int = 60_000          # максимальный размер контекста для LLM (~40K токенов)
-    regex_context_lines: int = 5  # строк контекста вокруг regex-совпадения
+    regex_context_lines: int = 5             # строк контекста вокруг regex-совпадения
+    memory_max_turns: int = 5               # сколько последних обменов хранить в памяти диалога
+    reranker_top_n: int = 5                 # топ-N чанков после reranking (0 = reranking отключён)
+    hyde_enabled: bool = True               # включить HyDE (генерация гипотетического документа)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
@@ -137,6 +151,263 @@ def _split_text_by_size(text: str, chunk_size: int, chunk_overlap: int) -> list[
     return chunks
 
 
+def _is_table_line(line: str) -> bool:
+    """Возвращает True если строка является частью таблицы (Markdown или grid/RST)."""
+    stripped = line.lstrip()
+    return stripped.startswith("|") or (stripped.startswith("+") and "-" in stripped)
+
+
+def _parse_md_table(lines: list[str]) -> tuple[list[str], list[list[str]]]:
+    """
+    Разбирает Markdown-таблицу (|col|col|) на заголовки и строки данных.
+    Возвращает (headers, data_rows), где каждый элемент — список значений ячеек.
+    Строки-разделители (| --- |) пропускаются.
+    """
+    headers: list[str] = []
+    data_rows: list[list[str]] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        # Убираем ведущий/завершающий `|`, разбиваем по `|`
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        # Строка-разделитель: все ячейки из тире/двоеточий/пробелов
+        if all(re.match(r"^[-:]+$", c) for c in cells if c):
+            continue
+        if not headers:
+            headers = cells
+        else:
+            data_rows.append(cells)
+
+    return headers, data_rows
+
+
+def _parse_grid_table(lines: list[str]) -> tuple[list[str], list[list[str]]]:
+    """
+    Разбирает grid/RST-таблицу (разделители +----+) на заголовки и строки данных.
+
+    Поддерживает многострочные ячейки: текст из нескольких строк одной ячейки
+    конкатенируется через пробел. Вертикальные объединения (rowspan) не поддерживаются —
+    каждый блок между разделителями считается отдельной строкой.
+    Возвращает (headers, data_rows).
+    """
+    # Строки-разделители: начинаются с '+' и содержат '-'
+    sep_indices = [
+        i for i, line in enumerate(lines)
+        if line.strip().startswith("+") and "-" in line
+    ]
+
+    if len(sep_indices) < 2:
+        return [], []
+
+    # Определяем границы столбцов по первой строке-разделителю
+    first_sep = lines[sep_indices[0]].rstrip()
+    col_starts = [i for i, c in enumerate(first_sep) if c == "+"]
+
+    if len(col_starts) < 2:
+        return [], []
+
+    col_ranges: list[tuple[int, int]] = [
+        (col_starts[j] + 1, col_starts[j + 1])
+        for j in range(len(col_starts) - 1)
+    ]
+
+    def _extract_cells(row_lines: list[str]) -> list[str]:
+        """Извлекает текст ячеек из блока строк между разделителями."""
+        cells = [""] * len(col_ranges)
+        for rline in row_lines:
+            if not rline.lstrip().startswith("|"):
+                continue
+            padded = rline.rstrip()
+            for ci, (start, end) in enumerate(col_ranges):
+                if start < len(padded):
+                    part = padded[start:end].strip()
+                    if part:
+                        cells[ci] = (cells[ci] + " " + part).strip()
+        return cells
+
+    headers: list[str] = []
+    data_rows: list[list[str]] = []
+
+    for block_idx in range(len(sep_indices) - 1):
+        block_start = sep_indices[block_idx] + 1
+        block_end = sep_indices[block_idx + 1]
+        row_lines = lines[block_start:block_end]
+        cells = _extract_cells(row_lines)
+
+        if not any(cells):
+            continue
+
+        if not headers:
+            headers = cells
+        else:
+            # Пропускаем строки-дублики заголовка (иногда повторяется после первого +---+)
+            if cells != headers:
+                data_rows.append(cells)
+
+    return headers, data_rows
+
+
+def _table_row_to_docs(
+    headers: list[str],
+    header_line: str,
+    separator_line: str,
+    data_rows: list[list[str]],
+    source_name: str,
+    breadcrumb: str,
+) -> list[Document]:
+    """
+    Создаёт один Document на каждую строку данных таблицы.
+
+    Формат page_content каждого чанка:
+        <оригинальная строка таблицы с заголовком>
+        <key-value строка: Столбец: значение | ...)
+
+    Такое представление позволяет:
+    - Семантически искать по значениям (IP, имена, коды)
+    - LLM видит и столбец и значение без дополнительного контекста
+    """
+    docs: list[Document] = []
+    for row_cells in data_rows:
+        # Нормализуем длину строки до числа заголовков
+        padded = row_cells + [""] * max(0, len(headers) - len(row_cells))
+        padded = padded[:len(headers)] if headers else row_cells
+
+        # Markdown-строка (с заголовком таблицы для контекста)
+        md_row = f"| {' | '.join(padded)} |"
+        table_context = f"{header_line}\n{separator_line}\n{md_row}"
+
+        # Key-value представление строки
+        kv_parts = [
+            f"{h}: {v}"
+            for h, v in zip(headers, padded)
+            if h and v  # пропускаем пустые ячейки
+        ]
+        kv_line = " | ".join(kv_parts)
+
+        page_content = f"{table_context}\n\n{kv_line}" if kv_line else table_context
+
+        docs.append(Document(
+            page_content=page_content,
+            metadata={
+                "source": source_name,
+                "section": breadcrumb,
+                "chunk_type": "table_row",
+                "table_headers": ", ".join(headers),
+            },
+        ))
+    return docs
+
+
+def _split_section_preserving_tables(
+    text: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    source_name: str,
+    breadcrumb: str,
+) -> list[Document]:
+    """
+    Разбивает текст секции на чанки:
+    - Markdown-таблицы: каждая строка → отдельный Document (row-level chunking)
+      с key-value представлением и заголовком таблицы в контексте.
+    - Нетабличный текст: разбивается по размеру стандартным способом.
+    """
+    lines = text.splitlines(keepends=True)
+    blocks: list[tuple[bool, str]] = []
+    i = 0
+    while i < len(lines):
+        if _is_table_line(lines[i]):
+            table_lines: list[str] = []
+            while i < len(lines) and _is_table_line(lines[i]):
+                table_lines.append(lines[i])
+                i += 1
+            blocks.append((True, "".join(table_lines)))
+        else:
+            prose_lines: list[str] = []
+            while i < len(lines) and not _is_table_line(lines[i]):
+                prose_lines.append(lines[i])
+                i += 1
+            blocks.append((False, "".join(prose_lines)))
+
+    docs: list[Document] = []
+    for is_table, block in blocks:
+        if not block.strip():
+            continue
+
+        if is_table:
+            # Парсим таблицу: заголовки + строки данных
+            block_lines = block.splitlines()
+
+            # Определяем тип таблицы: grid (+----+) или Markdown (| col |)
+            is_grid = any(
+                line.strip().startswith("+") and "-" in line
+                for line in block_lines
+            )
+            if is_grid:
+                headers, data_rows = _parse_grid_table(block_lines)
+            else:
+                headers, data_rows = _parse_md_table(block_lines)
+
+            if not headers or not data_rows:
+                # Если таблица не распозналась — кладём целиком как обычный чанк
+                docs.append(Document(
+                    page_content=block,
+                    metadata={"source": source_name, "section": breadcrumb, "chunk_type": "table_raw"},
+                ))
+                continue
+
+            # Находим строку-заголовок и строку-разделитель для контекста в каждом чанке
+            header_line = ""
+            separator_line = ""
+            if is_grid:
+                # Для grid-таблиц заголовок — первая строка `|`, разделитель — первая `+---+`
+                for line in block_lines:
+                    stripped = line.strip()
+                    if not separator_line and stripped.startswith("+") and "-" in stripped:
+                        separator_line = stripped
+                    elif separator_line and not header_line and stripped.startswith("|"):
+                        header_line = stripped
+                    elif header_line and separator_line and stripped.startswith("+") and "-" in stripped:
+                        break  # нашли оба
+            else:
+                for line in block_lines:
+                    stripped = line.strip()
+                    if not header_line and stripped.startswith("|") and not re.match(r"^\|[\s|:-]+\|$", stripped):
+                        header_line = stripped
+                    elif header_line and not separator_line and re.match(r"^\|[\s|:-]+\|$", stripped):
+                        separator_line = stripped
+
+            row_docs = _table_row_to_docs(
+                headers=headers,
+                header_line=header_line,
+                separator_line=separator_line,
+                data_rows=data_rows,
+                source_name=source_name,
+                breadcrumb=breadcrumb,
+            )
+            docs.extend(row_docs)
+            logger.debug(
+                f"  Таблица [{source_name}] '{breadcrumb[:60]}': "
+                f"{len(data_rows)} строк → {len(row_docs)} чанков"
+            )
+        else:
+            # Нетабличный текст
+            if len(block) <= chunk_size:
+                docs.append(Document(
+                    page_content=block,
+                    metadata={"source": source_name, "section": breadcrumb},
+                ))
+            else:
+                for sub in _split_text_by_size(block, chunk_size, chunk_overlap):
+                    docs.append(Document(
+                        page_content=sub,
+                        metadata={"source": source_name, "section": breadcrumb},
+                    ))
+
+    return docs
+
+
 def split_md_file(md_file: Path) -> list[Document]:
     """
     Разбивает .md файл на чанки с учётом структуры заголовков.
@@ -185,11 +456,15 @@ def split_md_file(md_file: Path) -> list[Document]:
                 metadata={"source": source_name, "section": breadcrumb},
             ))
         else:
-            for sub in _split_text_by_size(section_text, settings.chunk_size, settings.chunk_overlap):
-                result.append(Document(
-                    page_content=sub,
-                    metadata={"source": source_name, "section": breadcrumb},
-                ))
+            result.extend(
+                _split_section_preserving_tables(
+                    section_text,
+                    settings.chunk_size,
+                    settings.chunk_overlap,
+                    source_name=source_name,
+                    breadcrumb=breadcrumb,
+                )
+            )
 
     logger.debug(f"{source_name}: {len(result)} чанков")
     return result
@@ -231,21 +506,53 @@ def _make_http_client() -> chromadb.HttpClient:
     )
 
 
-_MIN_CHUNK_LEN = 20  # минимальная длина текста чанка для индексации
+_MIN_CHUNK_LEN = 20        # минимальная длина текста чанка для индексации
+_MIN_LETTER_RATIO = 0.15   # минимальная доля букв — применяется только если нет "ценных" паттернов
+
+# Паттерны, присутствие которых делает чанк ценным даже при малом числе букв
+_VALUABLE_PATTERNS = re.compile(
+    r"""
+    \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}   # IPv4
+    | \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}  # CIDR
+    | (?:порт|port)\s*:?\s*\d{2,5}           # порт
+    | (?:vlan|влан)\s*:?\s*\d+               # VLAN
+    | \b0x[0-9A-Fa-f]{4,}\b                  # hex
+    | \b[А-ЯA-Z]{2,}-\d+(?:\.\d+)*\b        # номер документа
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
 
 
 def _is_valid_chunk(doc: Document) -> bool:
     """
     Проверяет, что чанк пригоден для создания эмбеддинга.
-    Намеренно мягкий фильтр — отсекает только полностью пустые/бессмысленные чанки,
-    чтобы не потерять таблицы с IP-адресами и числовыми данными.
+
+    Логика:
+    1. Минимальная длина — отсекает пустые чанки.
+    2. Минимальное число alnum-символов — отсекает чанки из одних спецсимволов (---|---).
+    3. Если чанк содержит «ценные» паттерны (IPv4, порт, VLAN, hex, номер документа) —
+       пропускаем в индекс даже при малом числе букв. IP-адреса важны для поиска!
+    4. Если «ценных» паттернов нет — проверяем долю букв (_MIN_LETTER_RATIO).
+       Чанки с чисто числовыми строками без смыслового текста вызывают NaN в bge-m3.
     """
     text = doc.page_content.strip()
     if len(text) < _MIN_CHUNK_LEN:
         return False
-    # Отфильтровываем чанки из одних спецсимволов (разделители, линии)
+
     alnum_count = sum(1 for c in text if c.isalnum())
-    return alnum_count >= 3
+    if alnum_count < 3:
+        return False
+
+    # Чанк с IP/портами/VLAN/hex — ценен, разрешаем даже без букв
+    if _VALUABLE_PATTERNS.search(text):
+        return True
+
+    # Проверяем долю букв: чанки без ценных паттернов и почти без букв → NaN
+    letter_count = sum(1 for c in text if c.isalpha())
+    if letter_count / max(len(text), 1) < _MIN_LETTER_RATIO:
+        return False
+
+    return True
 
 
 def _add_batch_safe(store: Chroma, batch: list[Document]) -> int:
@@ -412,6 +719,11 @@ PROMPT_TEMPLATE = """\
 3. Приводи точные цитаты и ссылки на источник (название файла).
 4. Если информации недостаточно — явно скажи об этом.
 5. Отвечай на русском языке, структурированно.
+6. Каждый фрагмент контекста снабжён заголовком вида [файл] — раздел.
+   Если ключевые термины вопроса встречаются в заголовке раздела — считай этот фрагмент приоритетным
+   и опирайся на него в первую очередь при формировании ответа.
+7. Для таблиц: каждая строка представлена в виде «Заголовок столбца: значение».
+   Используй эти пары для точного ответа на вопросы о конкретных значениях (IP, названия, коды).
 
 Контекст:
 {context}
