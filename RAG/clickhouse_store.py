@@ -54,12 +54,13 @@ logger = logging.getLogger(__name__)
 
 class ClickHouseStoreSettings(BaseModel):
     """Connection and table settings for ClickHouseVectorStore."""
-    host:     str = "localhost"
-    port:     int = 8123
-    username: str = "clickhouse"
-    password: str = "clickhouse"
-    database: str = "soib_kcoi_v2"
-    table:    str = "chunks"
+    host:         str = "localhost"
+    port:         int = 8123
+    username:     str = "clickhouse"
+    password:     str = "clickhouse"
+    database:     str = "soib_kcoi_v2"
+    table:        str = "chunks"
+    pool_maxsize: int = 16   # urllib3 connection pool size; increase for many parallel tool calls
 
     model_config = {"env_prefix": "CLICKHOUSE_"}
 
@@ -325,6 +326,79 @@ class ClickHouseVectorStore(VectorStore):
             docs.append(Document(page_content=content, metadata=meta))
         return docs
 
+    def multi_term_exact_search(
+        self,
+        terms: list[str],
+        limit: int = 100,
+        chunk_type: Optional[str] = None,
+    ) -> list[tuple[Document, int]]:
+        """Multi-term exact search with per-chunk match-count scoring.
+
+        Each term is checked independently via positionCaseInsensitive.
+        The SQL expression sums per-term boolean hits to produce a match_count
+        for every chunk.  Results are sorted by match_count DESC so chunks
+        containing the most terms appear first.
+
+        Used to implement the search strategy:
+          1. All terms at once (match_count == len(terms))
+          2. Most terms (match_count >= threshold)
+          3. Any single term (match_count >= 1)
+        — all in a single round-trip to ClickHouse.
+
+        Args:
+            terms:      List of substrings to search (case-insensitive).
+            limit:      Maximum number of results to return.
+            chunk_type: Optional chunk_type filter.
+
+        Returns:
+            List of (Document, match_count) sorted by match_count DESC.
+            match_count is the number of terms found in the chunk's content.
+        """
+        if not terms:
+            return []
+
+        # Build: sum of per-term boolean hits as match_count
+        match_expr = " + ".join(
+            f"(positionCaseInsensitive(content, {{t{i}:String}}) > 0)"
+            for i in range(len(terms))
+        )
+
+        where_clauses = [f"({match_expr}) > 0"]
+        if chunk_type is not None:
+            where_clauses.append("chunk_type = {ct:String}")
+
+        sql = f"""
+            SELECT source, section, chunk_type, table_headers, content,
+                   line_start, line_end, chunk_index,
+                   {match_expr} AS match_count
+            FROM {self._cfg.database}.{self._cfg.table} FINAL
+            WHERE {" AND ".join(where_clauses)}
+            ORDER BY match_count DESC
+            LIMIT {{lim:UInt32}}
+        """
+        params: dict[str, Any] = {f"t{i}": term for i, term in enumerate(terms)}
+        params["lim"] = limit
+        if chunk_type is not None:
+            params["ct"] = chunk_type
+
+        result = self._client.query(sql, parameters=params)
+        docs: list[tuple[Document, int]] = []
+        for row in result.result_rows:
+            source, section, ct_val, table_headers, content, line_start, line_end, chunk_index, match_count = row
+            meta: dict = {
+                "source":      source,
+                "section":     section,
+                "chunk_type":  ct_val,
+                "line_start":  int(line_start),
+                "line_end":    int(line_end),
+                "chunk_index": int(chunk_index),
+            }
+            if table_headers:
+                meta["table_headers"] = table_headers
+            docs.append((Document(page_content=content, metadata=meta), int(match_count)))
+        return docs
+
+
     def get_sample(
         self,
         limit: int = 15,
@@ -467,12 +541,20 @@ class ClickHouseVectorStore(VectorStore):
 # ---------------------------------------------------------------------------
 
 def _make_client(cfg: ClickHouseStoreSettings) -> Client:
-    """Create a clickhouse-connect Client from settings."""
+    """Create a clickhouse-connect Client from settings.
+
+    pool_mgr is set explicitly to prevent urllib3 "Connection pool is full"
+    warnings when the agent makes many parallel tool calls to ClickHouse.
+    Since clickhouse-connect >= 0.8 pool_maxsize was replaced by pool_mgr
+    (urllib3.PoolManager).
+    """
+    import urllib3
     return clickhouse_connect.get_client(
         host=cfg.host,
         port=cfg.port,
         username=cfg.username,
         password=cfg.password,
+        pool_mgr=urllib3.PoolManager(maxsize=cfg.pool_maxsize),
     )
 
 

@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     reranker_top_n: int = 15          # top-N anchors kept after LLM reranking (step 2.5)
     hyde_enabled: bool = True
     llm_log_enabled: bool = True           # write LLM prompts/responses to logs/_rag_*.log
+    # Cross-session memory (ClickHouse table in the same database)
+    agent_memory_table:          str   = "agent_memory"
+    agent_memory_enabled:        bool  = True
+    agent_memory_min_score:      int   = 4    # save only if completeness score >= this
+    agent_memory_min_tool_calls: int   = 2    # save only if non-trivial (tool calls >= this)
+    agent_memory_recall_sim:     float = 0.80 # min cosine similarity to inject hint
+    agent_memory_dedup_sim:      float = 0.92 # skip saving if duplicate exists above this
     # Neighbor-chunk enrichment (step 3)
     # Preceding context is fetched up to enrich_before_chars (≈2× larger than after).
     # A large number of candidate chunks is fetched from ClickHouse; Python trims by chars.
@@ -224,6 +231,7 @@ def build_vectorstore(force_reindex: bool = False) -> ClickHouseVectorStore:
         client=__import__("clickhouse_connect").get_client(
             host=ch_cfg.host, port=ch_cfg.port,
             username=ch_cfg.username, password=ch_cfg.password,
+            pool_mgr=__import__("urllib3").PoolManager(maxsize=ch_cfg.pool_maxsize),
         ),
         embedding=embeddings,
         cfg=ch_cfg,
