@@ -37,16 +37,37 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama
 
+import re as _re
 import rag_chat
 from rag_chat import (
     settings,
     build_vectorstore,
     regex_search,
     SEP,
-    _HEADER_RE,
 )
+from clickhouse_store import ClickHouseVectorStore
+from md_splitter import _clean_text as _clean_header_text
+from llm_call_logger import LlmCallLogger
+
+# Heading regex (was in rag_chat before md_splitter refactoring)
+_HEADER_RE = _re.compile(r"^(#{1,4})\s+(.+)$")
 
 logger = logging.getLogger(__name__)
+
+# LLM call logger — activated when settings.llm_log_enabled = true
+# Lazy-initialised on first use so settings are fully loaded before construction.
+_llm_call_logger: LlmCallLogger | None = None
+
+
+def _get_llm_logger() -> LlmCallLogger:
+    global _llm_call_logger
+    if _llm_call_logger is None:
+        from pathlib import Path as _Path
+        _llm_call_logger = LlmCallLogger(
+            enabled=settings.llm_log_enabled,
+            log_dir=_Path(__file__).parent / "logs",
+        )
+    return _llm_call_logger
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +203,18 @@ class QueryAnalysis(BaseModel):
     query_type: str           # "factual" | "list" | "comparison" | "pattern_search"
     key_terms: list[str]      # ключевые термины и аббревиатуры
     search_queries: list[str] # 2-4 перефразировки для semantic search
+    exact_terms: list[str]    # короткие фразы для точного вхождения в текст чанков
     regex_patterns: list[str] # regex-паттерны (пусто если не нужны)
     reasoning: str            # краткое объяснение плана
+
+
+class SearchEvaluation(BaseModel):
+    """Результат оценки найденных чанков — нужна ли дополнительная итерация поиска."""
+    needs_more: bool              # True = запустить ещё один поиск
+    reasoning: str                # объяснение решения
+    new_search_queries: list[str] # новые перефразировки (если needs_more=True)
+    new_exact_terms: list[str]    # новые точные термины (если needs_more=True)
+    new_query_type: str = "factual"  # тип запроса для второй итерации
 
 
 class SectionRef(BaseModel):
@@ -199,6 +230,7 @@ class AgentAnswer(BaseModel):
     analysis: QueryAnalysis
     retrieved_chunks: int
     enriched_sections: int      # количество секций, дочитанных из файлов
+    iterations: int = 1         # количество выполненных итераций поиска
     answer: str
     source_files: list[str]
     found_sections: list[SectionRef]  # все найденные секции для прозрачности
@@ -225,6 +257,12 @@ _ANALYSIS_PROMPT = """\
     "перефразировка 2 другими словами",
     "перефразировка 3 по смыслу"
   ],
+  "exact_terms": [
+    "краткая фраза",
+    "аббревиатура",
+    "полное название",
+    "синоним"
+  ],
   "regex_patterns": [],
   "reasoning": "кратко: что ищем и почему такой план"
 }}
@@ -232,7 +270,15 @@ _ANALYSIS_PROMPT = """\
 Правила:
 - query_type = "pattern_search" если ищут IP, номера, коды, шаблоны
 - regex_patterns заполнять только при pattern_search
-- search_queries: 2-4 штуки, разными словами
+- search_queries: 2-4 штуки, разными словами — для семантического поиска по смыслу
+- exact_terms: 3-6 коротких фраз для поиска по точному вхождению в текст документа.
+  Как составлять exact_terms:
+  * аббревиатуру из запроса — добавить как есть: "СУБД"
+  * составное понятие — добавить ключевое слово и полную фразу: "СУБД", "типы СУБД", "виды СУБД"
+  * раскрыть аббревиатуру полностью: "система управления базами данных"
+  * добавить синонимы: "база данных", "хранилище данных"
+  Пример для запроса "какие типы СУБД используются":
+    exact_terms: ["СУБД", "типы СУБД", "виды СУБД", "категории СУБД", "система управления базами данных"]
 - key_terms: аббревиатуры раскрывать (КЦОИ → "коллективный центр обработки информации")
 - если есть история диалога — учитывай её при построении плана поиска
 """
@@ -259,9 +305,67 @@ _SYNTHESIS_PROMPT = """\
 Ответ:"""
 
 
+_EVALUATION_PROMPT = """\
+Ты — аналитик качества поиска по документации СОИБ КЦОИ Банка России.
+
+Пользователь задал вопрос, был выполнен поиск, найдены следующие фрагменты документов.
+Твоя задача: оценить, достаточно ли найденной информации для полного ответа на вопрос.
+
+Вопрос: {question}
+
+Найденные фрагменты (краткое содержание):
+{found_summary}
+
+Верни ТОЛЬКО валидный JSON без комментариев и markdown-блоков:
+{{
+  "needs_more": <true|false>,
+  "reasoning": "объяснение: что найдено, что отсутствует, почему нужен/не нужен доп. поиск",
+  "new_search_queries": [
+    "альтернативная формулировка 1",
+    "альтернативная формулировка 2"
+  ],
+  "new_exact_terms": [
+    "точный термин 1",
+    "точный термин 2"
+  ],
+  "new_query_type": "<factual|list|comparison|pattern_search>"
+}}
+
+Правила:
+- needs_more = true ТОЛЬКО если в найденных фрагментах явно не хватает конкретных данных
+  (например, упоминается таблица, но её строки не найдены; или ответ частичный)
+- needs_more = false если найдено достаточно для ответа, даже если ответ неполный
+- new_search_queries: 2-3 формулировки, принципиально отличные от предыдущих
+- new_exact_terms: 2-4 точных термина, которые могли быть пропущены
+- если needs_more = false — new_search_queries и new_exact_terms могут быть пустыми
+"""
+
+
 # ---------------------------------------------------------------------------
 # Шаги агентного пайплайна
 # ---------------------------------------------------------------------------
+
+_LLM_RERANK_PROMPT = """\
+Ты — ранжировщик фрагментов документации. Оцени релевантность каждого фрагмента \
+для ответа на вопрос пользователя.
+
+Вопрос: {question}
+
+Фрагменты документов:
+{chunks_text}
+
+Верни ТОЛЬКО валидный JSON без комментариев и markdown-блоков:
+{{
+  "ranked_indices": [<индекс наиболее релевантного>, ..., <индекс наименее релевантного>],
+  "reasoning": "кратко: почему такой порядок"
+}}
+
+Правила:
+- ranked_indices должен содержать ВСЕ индексы от 0 до {last_idx} ровно по одному разу
+- первыми ставь фрагменты, которые напрямую отвечают на вопрос (факты, таблицы, списки)
+- затем — косвенно релевантные (контекст, определения)
+- в конце — нерелевантные
+"""
 
 def analyze_query(
     llm: ChatOllama,
@@ -282,7 +386,11 @@ def analyze_query(
     history_block = f"\n{history_text}\n" if history_text else ""
 
     logger.debug(f"Анализируем запрос: {question}")
-    raw = chain.invoke({"question": question, "history": history_block})
+    with _get_llm_logger().record("analyze_query") as rec:
+        rendered = prompt.format(question=question, history=history_block)
+        rec.set_request(rendered)
+        raw = chain.invoke({"question": question, "history": history_block})
+        rec.set_response(raw)
 
     clean = _strip_think_tags(raw)
 
@@ -293,12 +401,15 @@ def analyze_query(
             query_type="factual",
             key_terms=[question],
             search_queries=[question],
+            exact_terms=[],
             regex_patterns=[],
             reasoning="fallback: не удалось распарсить план",
         )
 
     try:
         data = json.loads(json_match.group(0))
+        # exact_terms может отсутствовать в ответе старых версий промпта
+        data.setdefault("exact_terms", [])
         analysis = QueryAnalysis(**data)
     except Exception as exc:
         logger.warning(f"Ошибка парсинга QueryAnalysis: {exc}\nRaw: {raw[:300]}")
@@ -306,19 +417,236 @@ def analyze_query(
             query_type="factual",
             key_terms=[question],
             search_queries=[question],
+            exact_terms=[],
             regex_patterns=[],
             reasoning=f"fallback: {exc}",
         )
 
     logger.info(
         f"План поиска построен\n"
-        f"  Тип запроса:   {analysis.query_type}\n"
+        f"  Тип запроса:    {analysis.query_type}\n"
         f"  Ключевые слова: {json.dumps(analysis.key_terms, ensure_ascii=False)}\n"
-        f"  Поисковых запросов: {len(analysis.search_queries)}\n"
+        f"  Semantic queries: {len(analysis.search_queries)}\n"
+        f"  Exact terms:    {json.dumps(analysis.exact_terms, ensure_ascii=False)}\n"
         f"  Regex-паттернов: {len(analysis.regex_patterns)}\n"
         f"  Обоснование: {analysis.reasoning}"
     )
     return analysis
+
+
+def evaluate_search_results(
+    llm: ChatOllama,
+    question: str,
+    docs: list[Document],
+    max_summary_chars: int = 8000,
+) -> SearchEvaluation:
+    """
+    Шаг 1.5: LLM оценивает найденные чанки и решает, нужна ли вторая итерация поиска.
+
+    Передаёт LLM краткое содержание найденных фрагментов (source + section + начало текста).
+    Ограничивает суммарный размер сводки до max_summary_chars символов.
+
+    Возвращает SearchEvaluation:
+      - needs_more=True  → запустить вторую итерацию с new_search_queries / new_exact_terms
+      - needs_more=False → текущих данных достаточно для финального ответа
+    """
+    # Формируем краткую сводку найденных фрагментов для передачи в LLM
+    summary_lines: list[str] = []
+    total_chars = 0
+    for i, doc in enumerate(docs, 1):
+        src = doc.metadata.get("source", "?")
+        section = doc.metadata.get("section", "")
+        chunk_type = doc.metadata.get("chunk_type", "")
+        preview = doc.page_content[:300].replace("\n", " ")
+        line = f"[{i}] [{src}] {section} ({chunk_type}): {preview}"
+        total_chars += len(line)
+        if total_chars > max_summary_chars:
+            summary_lines.append(f"... [ещё {len(docs) - i} фрагментов]")
+            break
+        summary_lines.append(line)
+
+    found_summary = "\n".join(summary_lines)
+
+    prompt = ChatPromptTemplate.from_template(_EVALUATION_PROMPT)
+    chain = prompt | llm | StrOutputParser()
+
+    logger.debug(f"Оцениваем результаты поиска: {len(docs)} чанков")
+    with _get_llm_logger().record("evaluate_search") as rec:
+        rendered = prompt.format(question=question, found_summary=found_summary)
+        rec.set_request(rendered)
+        raw = chain.invoke({"question": question, "found_summary": found_summary})
+        rec.set_response(raw)
+
+    clean = _strip_think_tags(raw)
+    json_match = re.search(r'\{.*\}', clean, re.DOTALL)
+    if not json_match:
+        logger.warning(f"LLM вернул не-JSON при оценке, пропускаем вторую итерацию\nRaw: {raw[:300]}")
+        return SearchEvaluation(
+            needs_more=False,
+            reasoning="не удалось распарсить оценку LLM",
+            new_search_queries=[],
+            new_exact_terms=[],
+        )
+
+    try:
+        data = json.loads(json_match.group(0))
+        data.setdefault("new_search_queries", [])
+        data.setdefault("new_exact_terms", [])
+        data.setdefault("new_query_type", "factual")
+        evaluation = SearchEvaluation(**data)
+    except Exception as exc:
+        logger.warning(f"Ошибка парсинга SearchEvaluation: {exc}\nRaw: {raw[:300]}")
+        return SearchEvaluation(
+            needs_more=False,
+            reasoning=f"ошибка парсинга: {exc}",
+            new_search_queries=[],
+            new_exact_terms=[],
+        )
+
+    logger.info(
+        f"Оценка результатов поиска\n"
+        f"  needs_more: {evaluation.needs_more}\n"
+        f"  Обоснование: {evaluation.reasoning[:200]}\n"
+        + (
+            f"  Новые запросы: {evaluation.new_search_queries}\n"
+            f"  Новые термины: {evaluation.new_exact_terms}"
+            if evaluation.needs_more else ""
+        )
+    )
+    return evaluation
+
+
+def llm_rerank_docs(
+    llm: ChatOllama,
+    question: str,
+    docs: list[Document],
+    top_n: int,
+    batch_size: int = 20,
+) -> list[Document]:
+    """
+    Шаг 2.5: Listwise LLM-ранжирование найденных чанков.
+
+    Алгоритм:
+      1. Отделяем positional-чанки (с line_start) от non-positional (regex и т.п.).
+         Non-positional всегда сохраняются — они содержат точно найденные данные.
+      2. Разбиваем positional на батчи по batch_size.
+      3. Для каждого батча LLM получает краткое описание чанков (source + section +
+         250 символов содержимого) и возвращает ranked_indices — список индексов
+         от наиболее к наименее релевантному.
+      4. Каждой позиции присваивается score = batch_size - rank_pos.
+         Батчи сравнимы по величине, т.к. одинакового размера.
+      5. Если батчей > 1 — дополнительный финальный проход по топ-кандидатам
+         из каждого батча для inter-batch сравнения.
+      6. Возвращает top_n наиболее релевантных positional + все non-positional.
+
+    При ошибке парсинга LLM-ответа батч сохраняется в исходном порядке.
+    """
+    if not docs or top_n <= 0:
+        return docs
+
+    positional = [d for d in docs if d.metadata.get("line_start", 0) != 0
+                  and not d.metadata.get("source", "").startswith("regex")]
+    non_positional = [d for d in docs if d not in positional]
+
+    if len(positional) <= top_n:
+        logger.debug(f"LLM rerank: пропускаем, positional чанков ({len(positional)}) ≤ top_n ({top_n})")
+        return docs
+
+    def _chunk_summary(idx: int, doc: Document) -> str:
+        src = doc.metadata.get("source", "?")
+        section = doc.metadata.get("section", "")[:60]
+        preview = doc.page_content[:250].replace("\n", " ")
+        return f"[{idx}] [{src}] — {section}\n    {preview}"
+
+    def _rank_batch(batch: list[Document], offset: int) -> dict[int, float]:
+        """Ранжирует батч, возвращает {global_idx: score}."""
+        chunks_text = "\n\n".join(_chunk_summary(j, d) for j, d in enumerate(batch))
+        prompt = ChatPromptTemplate.from_template(_LLM_RERANK_PROMPT)
+        chain = prompt | llm | StrOutputParser()
+
+        with _get_llm_logger().record("llm_rerank") as rec:
+            rendered = prompt.format(
+                question=question,
+                chunks_text=chunks_text,
+                last_idx=len(batch) - 1,
+            )
+            rec.set_request(rendered)
+            raw = chain.invoke({
+                "question": question,
+                "chunks_text": chunks_text,
+                "last_idx": len(batch) - 1,
+            })
+            rec.set_response(raw)
+
+        clean = _strip_think_tags(raw)
+        json_match = re.search(r'\{.*\}', clean, re.DOTALL)
+        if not json_match:
+            logger.warning(f"LLM rerank: не удалось распарсить ответ батча, сохраняем исходный порядок")
+            return {offset + j: float(len(batch) - j) for j in range(len(batch))}
+
+        try:
+            data = json.loads(json_match.group(0))
+            ranked = data.get("ranked_indices", [])
+            reasoning = data.get("reasoning", "")
+            logger.debug(f"LLM rerank батч [{offset}..{offset+len(batch)-1}]: {reasoning[:100]}")
+        except Exception as exc:
+            logger.warning(f"LLM rerank: ошибка парсинга: {exc}")
+            return {offset + j: float(len(batch) - j) for j in range(len(batch))}
+
+        scores: dict[int, float] = {}
+        seen: set[int] = set()
+        for rank_pos, local_idx in enumerate(ranked):
+            if isinstance(local_idx, int) and 0 <= local_idx < len(batch) and local_idx not in seen:
+                seen.add(local_idx)
+                scores[offset + local_idx] = float(len(batch) - rank_pos)
+        # Добавляем пропущенные индексы (LLM мог забыть часть)
+        for j in range(len(batch)):
+            if (offset + j) not in scores:
+                scores[offset + j] = 0.0
+        return scores
+
+    # Ранжируем батчи
+    batches = [positional[i:i + batch_size] for i in range(0, len(positional), batch_size)]
+    all_scores: dict[int, float] = {}
+
+    for b_idx, batch in enumerate(batches):
+        batch_scores = _rank_batch(batch, b_idx * batch_size)
+        all_scores.update(batch_scores)
+
+    # Финальный проход если батчей > 1: берём топ-k из каждого батча и ранжируем ещё раз
+    if len(batches) > 1:
+        top_per_batch = max(1, top_n // len(batches) + 1)
+        candidates_per_batch: list[Document] = []
+        candidate_original_indices: list[int] = []
+
+        for b_idx, batch in enumerate(batches):
+            batch_indices = list(range(b_idx * batch_size, b_idx * batch_size + len(batch)))
+            sorted_local = sorted(batch_indices, key=lambda i: all_scores[i], reverse=True)
+            for gi in sorted_local[:top_per_batch]:
+                candidates_per_batch.append(positional[gi])
+                candidate_original_indices.append(gi)
+
+        final_scores = _rank_batch(candidates_per_batch, 0)
+        # Переносим финальные баллы на оригинальные индексы с бонусом
+        bonus = float(batch_size * len(batches))
+        for final_idx, orig_idx in enumerate(candidate_original_indices):
+            all_scores[orig_idx] = final_scores.get(final_idx, 0.0) + bonus
+
+    # Сортируем positional по score
+    sorted_positional = sorted(
+        range(len(positional)),
+        key=lambda i: all_scores.get(i, 0.0),
+        reverse=True,
+    )
+    top_positional = [positional[i] for i in sorted_positional[:top_n]]
+
+    logger.info(
+        f"LLM reranking завершён\n"
+        f"  Positional чанков: {len(positional)} → топ {len(top_positional)}\n"
+        f"  Non-positional (без изменений): {len(non_positional)}\n"
+        f"  Батчей LLM: {len(batches)}" + (" + 1 финальный" if len(batches) > 1 else "")
+    )
+    return non_positional + top_positional
 
 
 def multi_retrieve(
@@ -347,31 +675,27 @@ def multi_retrieve(
     if analysis.query_type == "list":
         top_k = top_k * 3
 
-    search_kwargs: dict = {"k": top_k}
-    if settings.retriever_score_threshold > 0:
-        retriever = vectorstore.as_retriever(
-            search_type="similarity_score_threshold",
-            search_kwargs={**search_kwargs, "score_threshold": settings.retriever_score_threshold},
-        )
-    else:
-        retriever = vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs=search_kwargs,
-        )
-
     seen: set[str] = set()
     all_docs: list[Document] = []
 
-    # Параллельные семантические поиски по всем перефразировкам
+    # Параллельные семантические поиски по всем перефразировкам.
+    # Каждый поток получает свой клон vectorstore с независимым HTTP-клиентом,
+    # т.к. clickhouse-connect не поддерживает конкурентные запросы в одной сессии.
     def _search(query: str) -> tuple[str, list[Document]]:
         logger.debug(f"Semantic search: {query}")
-        return query, retriever.invoke(query)
+        return query, vectorstore.clone().similarity_search(query, k=top_k)
+
+    logger.info(
+        f"Семантический поиск по {len(analysis.search_queries)} запросам (top_k={top_k}):\n"
+        + "\n".join(f"  [{i+1}] {q}" for i, q in enumerate(analysis.search_queries))
+    )
 
     with ThreadPoolExecutor(max_workers=len(analysis.search_queries)) as executor:
         futures = {executor.submit(_search, q): q for q in analysis.search_queries}
         for future in as_completed(futures):
             try:
-                _, docs = future.result()
+                query, docs = future.result()
+                logger.debug(f"  → '{query[:80]}': {len(docs)} чанков")
                 for doc in docs:
                     key = doc.page_content[:200]
                     if key not in seen:
@@ -379,6 +703,20 @@ def multi_retrieve(
                         all_docs.append(doc)
             except Exception as exc:
                 logger.warning(f"Ошибка семантического поиска: {exc}")
+
+    # Log semantic search results
+    _get_llm_logger().log_event(
+        "semantic_search",
+        f"Queries ({len(analysis.search_queries)}):\n"
+        + "\n".join(f"  [{i+1}] {q}" for i, q in enumerate(analysis.search_queries))
+        + f"\n\nFound {len(all_docs)} unique chunks:\n"
+        + "\n".join(
+            f"  [{i+1}] [{d.metadata.get('source','')}] {d.metadata.get('section','')[:60]}\n"
+            f"       {d.page_content[:150].replace(chr(10), ' | ')}"
+            for i, d in enumerate(all_docs[:20])
+        )
+        + (f"\n  ... and {len(all_docs) - 20} more" if len(all_docs) > 20 else "")
+    )
 
     # Принудительные regex-паттерны из pre-analysis (IP, FQDN, коды)
     forced = forced_regex or []
@@ -411,16 +749,233 @@ def multi_retrieve(
                     metadata={"source": match.file, "section": "regex-match"},
                 ))
 
+    # Exact-term поиск по точному вхождению (из analysis.exact_terms)
+    exact_docs_added: list[tuple[str, int]] = []  # (term, added_count) for logging
+    if analysis.exact_terms and hasattr(vectorstore, "exact_search"):
+        logger.info(
+            f"Exact-term поиск по {len(analysis.exact_terms)} фразам:\n"
+            + "\n".join(f"  \"{t}\"" for t in analysis.exact_terms)
+        )
+        for term in analysis.exact_terms:
+            try:
+                exact_docs = vectorstore.exact_search(term, limit=20)
+                added = 0
+                for doc in exact_docs:
+                    key = doc.page_content[:200]
+                    if key not in seen:
+                        seen.add(key)
+                        all_docs.append(doc)
+                        added += 1
+                exact_docs_added.append((term, added))
+                logger.debug(f"  exact '{term}': {len(exact_docs)} найдено, {added} новых")
+            except Exception as exc:
+                logger.warning(f"Ошибка exact_search для '{term}': {exc}")
+
+        _get_llm_logger().log_event(
+            "exact_search",
+            "Exact-term results:\n"
+            + "\n".join(f"  \"{term}\": +{cnt} new chunks" for term, cnt in exact_docs_added)
+        )
+
     logger.info(
         f"Поиск завершён\n"
         f"  Уникальных чанков: {len(all_docs)}\n"
-        f"  Семантических запросов (параллельно): {len(analysis.search_queries)}\n"
+        f"  Semantic запросов (параллельно): {len(analysis.search_queries)}\n"
+        f"  Exact terms: {len(analysis.exact_terms)}\n"
         f"  top_k per query: {top_k} (list-mode: {analysis.query_type == 'list'})\n"
         f"  Forced regex (pre-analysis): {len(forced)}\n"
         f"  LLM regex: {len(analysis.regex_patterns)}\n"
         f"  Score threshold: {settings.retriever_score_threshold or 'off'}"
     )
     return all_docs
+
+
+# ---------------------------------------------------------------------------
+# Шаг 3: Обогащение соседними чанками — добавляем N предыдущих и N следующих
+# ---------------------------------------------------------------------------
+
+def enrich_with_neighbor_chunks(
+    docs: list[Document],
+    vectorstore: ClickHouseVectorStore,
+) -> list[Document]:
+    """
+    Шаг 3: Для каждого якорного чанка загружает соседей из того же файла
+    и склеивает их в единый текст (merged_group).
+
+    Количество соседей определяется по символьному бюджету:
+      - preceding (до якоря): settings.enrich_before_chars  (по умолчанию 3000)
+      - following (после якоря): settings.enrich_after_chars (по умолчанию 1500)
+    Предыдущий контекст вдвое больше последующего, чтобы дать LLM
+    достаточно «разгона» перед найденным фрагментом.
+
+    Алгоритм на каждый якорь:
+      1. Запрашивает до enrich_candidates кандидатов в каждую сторону.
+      2. Trim preceding: идёт от ближайшего к якорю назад, НО останавливается
+         на границе подраздела — когда section чанка отличается от section якоря.
+         Если раздел исчерпан раньше бюджета — берётся весь раздел.
+         Если раздел длиннее бюджета — обрезаются самые дальние от якоря чанки.
+      3. Trim following: берёт чанки вперёд до исчерпания after_chars.
+         Граница раздела для следующих чанков не применяется.
+      4. Объединяет anchor + отфильтрованных соседей, сортирует по line_start.
+
+    Смежные группы разных якорей из одного файла объединяются в один Document.
+    Non-positional чанки (regex, line_start==0) передаются без изменений.
+    """
+    before_chars: int = settings.enrich_before_chars
+    after_chars: int = settings.enrich_after_chars
+    candidates: int = settings.enrich_candidates
+
+    # Разделяем позиционные якоря и non-positional (regex / без line_start)
+    positional: list[Document] = []
+    non_positional: list[Document] = []
+    for doc in docs:
+        source = doc.metadata.get("source", "")
+        line_start = doc.metadata.get("line_start", 0)
+        if source and not source.startswith("regex") and line_start != 0:
+            positional.append(doc)
+        else:
+            non_positional.append(doc)
+
+    seen_anchor_keys: set[tuple[str, int]] = set()
+    # source -> {line_start -> Document} — все отобранные куски
+    source_pieces: dict[str, dict[int, Document]] = {}
+
+    for anchor in positional:
+        source = anchor.metadata["source"]
+        line_start = anchor.metadata["line_start"]
+        key = (source, line_start)
+        if key in seen_anchor_keys:
+            continue
+        seen_anchor_keys.add(key)
+
+        # Загружаем кандидатов — намеренно берём много, обрежем по символам
+        raw = vectorstore.get_neighbor_chunks(
+            source=source,
+            line_start=line_start,
+            before=candidates,
+            after=candidates,
+        )
+        # raw = предыдущие (DESC → reversed в методе → ASC) + следующие
+        prev_candidates = [d for d in raw if d.metadata.get("line_start", 0) < line_start]
+        next_candidates = [d for d in raw if d.metadata.get("line_start", 0) > line_start]
+
+        # Trim preceding: идём от ближайшего к якорю назад.
+        # Правило: не пересекаем границу подраздела — если section чанка
+        # отличается от section якоря (начало параллельного/родительского раздела),
+        # считаем это началом окна и останавливаемся.
+        # Символьный бюджет (before_chars) применяется внутри найденной границы:
+        # если раздел короче бюджета — берём весь раздел;
+        # если длиннее — обрезаем самые дальние от якоря чанки.
+        anchor_section = anchor.metadata.get("section", "")
+        selected_prev: list[Document] = []
+        section_boundary_hit = False
+        budget = before_chars
+
+        for chunk in reversed(prev_candidates):   # от ближайшего к якорю к самому далёкому
+            chunk_section = chunk.metadata.get("section", "")
+            if chunk_section != anchor_section:
+                # Начало подраздела — дальше не идём
+                section_boundary_hit = True
+                break
+            chunk_len = len(chunk.page_content)
+            if budget <= 0:
+                break
+            selected_prev.append(chunk)
+            budget -= chunk_len
+
+        selected_prev = list(reversed(selected_prev))  # восстанавливаем порядок ASC
+
+        logger.debug(
+            f"  Якорь [{source}] line {line_start} section='{anchor_section[:50]}'\n"
+            f"    preceding: {len(selected_prev)} чанков"
+            + (" (граница раздела)" if section_boundary_hit else " (лимит символов)")
+        )
+
+        # Trim following по символьному бюджету
+        selected_next: list[Document] = []
+        budget = after_chars
+        for chunk in next_candidates:             # от ближайшего к далёкому
+            chunk_len = len(chunk.page_content)
+            if budget <= 0:
+                break
+            selected_next.append(chunk)
+            budget -= chunk_len
+
+        if source not in source_pieces:
+            source_pieces[source] = {}
+        pieces_map = source_pieces[source]
+
+        for piece in [anchor] + selected_prev + selected_next:
+            ls = piece.metadata.get("line_start", 0)
+            if ls not in pieces_map:
+                pieces_map[ls] = piece
+
+    # Склеиваем смежные куски каждого файла в непрерывные группы
+    merged_docs: list[Document] = []
+    total_groups = 0
+    total_pieces = 0
+
+    for source, pieces_map in source_pieces.items():
+        pieces = sorted(pieces_map.values(), key=lambda d: d.metadata.get("line_start", 0))
+
+        groups: list[list[Document]] = []
+        current_group: list[Document] = []
+        current_end: int = 0
+
+        for piece in pieces:
+            ls = piece.metadata.get("line_start", 0)
+            le = piece.metadata.get("line_end", ls + 1)
+            if not current_group:
+                current_group = [piece]
+                current_end = le
+            elif ls <= current_end + 1:
+                current_group.append(piece)
+                current_end = max(current_end, le)
+            else:
+                groups.append(current_group)
+                current_group = [piece]
+                current_end = le
+        if current_group:
+            groups.append(current_group)
+
+        for group in groups:
+            merged_content = "\n".join(p.page_content for p in group)
+            merged_meta = {
+                "source":     source,
+                "section":    group[0].metadata.get("section", ""),
+                "chunk_type": "merged_group",
+                "line_start": group[0].metadata.get("line_start", 0),
+                "line_end":   group[-1].metadata.get("line_end", 0),
+                "merge_size": len(group),
+            }
+            merged_docs.append(Document(page_content=merged_content, metadata=merged_meta))
+            total_pieces += len(group)
+
+        total_groups += len(groups)
+
+    logger.info(
+        f"Обогащение соседними чанками завершено\n"
+        f"  Якорей: {len(seen_anchor_keys)}\n"
+        f"  Бюджет контекста: ←{before_chars} / →{after_chars} символов\n"
+        f"  Файлов: {len(source_pieces)}\n"
+        f"  Merged-групп: {total_groups} (из {total_pieces} кусков)\n"
+        f"  Non-positional (без изменений): {len(non_positional)}"
+    )
+
+    _get_llm_logger().log_event(
+        "enrich_neighbors",
+        f"Anchors: {len(seen_anchor_keys)}, groups: {total_groups}, pieces: {total_pieces}\n"
+        f"Budget: before={before_chars}, after={after_chars}\n"
+        + "\n".join(
+            f"  [{d.metadata.get('source','')}] "
+            f"lines {d.metadata.get('line_start','')}–{d.metadata.get('line_end','')} "
+            f"({d.metadata.get('merge_size',1)} chunks)\n"
+            f"  {d.page_content[:120].replace(chr(10), ' | ')}"
+            for d in merged_docs[:10]
+        )
+    )
+
+    return non_positional + merged_docs
 
 
 def rerank_docs(docs: list[Document], question: str) -> list[Document]:
@@ -484,8 +1039,10 @@ def _read_full_section(md_file: Path, section_breadcrumb: str) -> str | None:
             header_text = m.group(2).strip()
 
             if not in_section:
-                # Ищем нужный заголовок (нечувствительно к регистру)
-                if header_text.lower() == target_header.lower():
+                # Clean Pandoc artifacts from file header before comparing
+                # e.g. "Серверы СУБД (#_Ref150262981)" → "Серверы СУБД"
+                clean_header_text = _clean_header_text(header_text)
+                if clean_header_text.lower() == target_header.lower():
                     in_section = True
                     section_level = level
                     collected.append(line)
@@ -575,6 +1132,16 @@ def enrich_with_full_sections(
         f"  Секции: " + ", ".join(f"[{r.source_file}] {r.section[:40]}" for r in sections_to_fetch[:5])
     )
 
+    _get_llm_logger().log_event(
+        "enrich_sections",
+        f"Enriched {fetched}/{len(sections_to_fetch)} sections from source files:\n"
+        + "\n".join(
+            f"  [{d.metadata.get('source','')}] {d.metadata.get('section','')[:60]}\n"
+            f"  {d.page_content[:200].replace(chr(10), ' | ')}"
+            for d in extra_docs
+        )
+    )
+
     return docs + extra_docs, section_refs
 
 
@@ -609,6 +1176,11 @@ def synthesize_answer(
 
         if chunk_type == "full_section":
             header = f"[FULL_SECTION][{src}]" + (f" — {section}" if section else "")
+        elif chunk_type == "merged_group":
+            ls = doc.metadata.get("line_start", "")
+            le = doc.metadata.get("line_end", "")
+            size = doc.metadata.get("merge_size", "")
+            header = f"[{src}]" + (f" — {section}" if section else "") + f" [строки {ls}–{le}, {size} чанков]"
         else:
             header = f"[{src}]" + (f" — {section}" if section else "")
 
@@ -616,7 +1188,16 @@ def synthesize_answer(
         chunk_len = len(chunk)
 
         if settings.max_context_chars > 0 and total_chars + chunk_len > settings.max_context_chars:
-            truncated_at = i
+            remaining = settings.max_context_chars - total_chars
+            if remaining > len(header) + 100:
+                # Обрезаем чанк до оставшегося бюджета вместо полного пропуска
+                truncated_chunk = chunk[:remaining] + "\n...[обрезано]"
+                context_parts.append(truncated_chunk)
+                total_chars += len(truncated_chunk)
+                logger.debug(
+                    f"Чанк [{src}] обрезан: {chunk_len:,} → {remaining:,} символов"
+                )
+            truncated_at = i + 1
             break
 
         context_parts.append(chunk)
@@ -629,14 +1210,19 @@ def synthesize_answer(
         )
 
     context = "\n\n---\n\n".join(context_parts)
-    sources = list({doc.metadata.get("source", "?") for doc in ordered_docs[:truncated_at or len(ordered_docs)]})
+    used_count = truncated_at if truncated_at is not None else len(ordered_docs)
+    sources = list({doc.metadata.get("source", "?") for doc in ordered_docs[:used_count]})
 
     history_text = memory.format_for_prompt() if memory and not memory.is_empty() else ""
     history_block = f"\n{history_text}\n" if history_text else ""
 
     prompt = ChatPromptTemplate.from_template(_SYNTHESIS_PROMPT)
     chain = prompt | llm | StrOutputParser()
-    answer = chain.invoke({"context": context, "question": question, "history": history_block})
+    with _get_llm_logger().record("synthesize_answer") as rec:
+        rendered = prompt.format(context=context, question=question, history=history_block)
+        rec.set_request(rendered)
+        answer = chain.invoke({"context": context, "question": question, "history": history_block})
+        rec.set_response(answer)
 
     answer = _strip_think_tags(answer)
     return answer, sources
@@ -647,7 +1233,7 @@ def synthesize_answer(
 # ---------------------------------------------------------------------------
 
 def agent_ask(
-    vectorstore,
+    vectorstore: ClickHouseVectorStore,
     llm: ChatOllama,
     question: str,
     knowledge_dir: Path,
@@ -659,9 +1245,10 @@ def agent_ask(
        (IP, FQDN, коды документов) из вопроса — до LLM, гарантированно
     1. analyze_query    — LLM строит план поиска (перефразировки + regex); учитывает memory
     2. multi_retrieve   — N семантических (параллельно) + forced regex + LLM regex, дедупликация
-    2.5 rerank_docs     — cross-encoder переранжирует чанки по реальной релевантности вопросу
-    3.5 enrich_with_full_sections — для каждой найденной секции читает полный контент
-        из исходного .md файла и добавляет в контекст (позволяет получить все строки таблиц)
+    2.5 rerank_docs     — cross-encoder переранжирует чанки (временно отключён)
+    3.  enrich_with_neighbor_chunks — для каждого найденного чанка добавляет ±5 соседних
+        по line_start из того же файла; позволяет не терять контекст из таблиц и списков
+    3.5 enrich_with_full_sections — читает полный контент секции из .md файла (временно отключён)
     4. synthesize_answer — LLM формирует финальный ответ; учитывает memory
 
     Args:
@@ -679,35 +1266,78 @@ def agent_ask(
     # Шаг 1: LLM-анализ
     analysis = analyze_query(llm, question, memory=memory)
 
-    # Шаг 2: поиск
+    # Шаг 2: поиск (итерация 1)
     docs = multi_retrieve(vectorstore, analysis, knowledge_dir, forced_regex=forced_regex)
 
-    # Шаг 2.5: переранжирование
-    docs = rerank_docs(docs, question)
+    # Шаг 2.5: LLM-reranking — отбираем лучшие якоря до обогащения
+    docs = llm_rerank_docs(llm, question, docs, top_n=settings.reranker_top_n)
+    section_refs: list = []
 
-    # Шаг 3.5: обогащение полными секциями из исходных файлов
-    docs, section_refs = enrich_with_full_sections(docs, knowledge_dir)
+    # Шаг 3: обогащение соседними чанками
+    docs = enrich_with_neighbor_chunks(docs, vectorstore)
 
-    # Шаг 4: синтез
-    answer, sources = synthesize_answer(llm, question, docs, memory=memory)
+    # Шаг 3.5: обогащение полными секциями из исходных файлов (временно отключён)
+    # docs, section_refs = enrich_with_full_sections(docs, knowledge_dir)
+
+    iterations = 1
+    all_docs = docs
+
+    # Шаг 1.5 → 2 → 3 (итерация 2): LLM оценивает результат и при необходимости
+    # выполняет второй поиск по переформулированным запросам
+    evaluation = evaluate_search_results(llm, question, all_docs)
+
+    if evaluation.needs_more and evaluation.new_search_queries:
+        logger.info(
+            f"Запускаем итерацию 2\n"
+            f"  Запросы: {evaluation.new_search_queries}\n"
+            f"  Термины: {evaluation.new_exact_terms}"
+        )
+        # Формируем новый план из оценки LLM
+        analysis2 = QueryAnalysis(
+            query_type=evaluation.new_query_type,
+            key_terms=evaluation.new_exact_terms,
+            search_queries=evaluation.new_search_queries,
+            exact_terms=evaluation.new_exact_terms,
+            regex_patterns=[],
+            reasoning=evaluation.reasoning,
+        )
+        docs2 = multi_retrieve(vectorstore, analysis2, knowledge_dir, forced_regex=[])
+        docs2 = enrich_with_neighbor_chunks(docs2, vectorstore)
+
+        # Объединяем с дедупликацией по content[:200]
+        seen_fps: set[str] = {d.page_content[:200] for d in all_docs}
+        new_docs = [d for d in docs2 if d.page_content[:200] not in seen_fps]
+        all_docs = all_docs + new_docs
+        iterations = 2
+
+        logger.info(
+            f"Итерация 2 завершена\n"
+            f"  Новых уникальных чанков: {len(new_docs)}\n"
+            f"  Итого чанков: {len(all_docs)}"
+        )
+
+    # Шаг 4: финальный синтез по всем найденным данным
+    answer, sources = synthesize_answer(llm, question, all_docs, memory=memory)
 
     if memory is not None:
         memory.add(question, answer)
         logger.debug(f"Memory: добавлен обмен, всего в буфере: {len(memory._turns)}")
 
-    full_section_count = sum(1 for d in docs if d.metadata.get("chunk_type") == "full_section")
+    full_section_count = sum(1 for d in all_docs if d.metadata.get("chunk_type") == "full_section")
 
     logger.info(
         f"Агентный ответ готов\n"
+        f"  Итераций поиска: {iterations}\n"
+        f"  Итого чанков: {len(all_docs)}\n"
         f"  Источников: {len(sources)}\n"
-        f"  Полных секций в контексте: {full_section_count}\n"
         f"  Файлы: {', '.join(sources)}"
     )
     return AgentAnswer(
         question=question,
         analysis=analysis,
-        retrieved_chunks=len(docs),
+        retrieved_chunks=len(all_docs),
         enriched_sections=full_section_count,
+        iterations=iterations,
         answer=answer,
         source_files=sources,
         found_sections=section_refs,
@@ -768,7 +1398,8 @@ def print_agent_answer(result: AgentAnswer) -> None:
     print(f"\n{SEP}")
     print(f"Вопрос: {result.question}")
     print(f"{'-' * 70}")
-    print(f"[Анализ] тип={result.analysis.query_type} | чанков={result.retrieved_chunks} | секций={result.enriched_sections}")
+    iters_label = f" | итераций={result.iterations}" if result.iterations > 1 else ""
+    print(f"[Анализ] тип={result.analysis.query_type} | чанков={result.retrieved_chunks} | секций={result.enriched_sections}{iters_label}")
     print(f"[Запросы] {' / '.join(result.analysis.search_queries[:2])}...")
     if result.analysis.reasoning:
         print(f"[План] {result.analysis.reasoning}")
@@ -849,7 +1480,8 @@ def main() -> None:
         f"  LLM:         {settings.ollama_model}\n"
         f"  Эмбеддинги:  {settings.ollama_embed_model}\n"
         f"  Источники:   {settings.knowledge_dir}\n"
-        f"  Chroma HTTP: http://{settings.chroma_host}:{settings.chroma_port}"
+        f"  ClickHouse:  {settings.clickhouse_host}:{settings.clickhouse_port}"
+        f" → {settings.clickhouse_database}.{settings.clickhouse_table}"
     )
 
     knowledge_dir = Path(settings.knowledge_dir)
