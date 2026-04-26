@@ -357,7 +357,7 @@ def build_expanded_query(question: str, expansion: QueryExpansion) -> str:
     if expansion.key_terms:
         terms_json = repr(expansion.key_terms)
         parts.append(
-            f"🎯 ШАГ 1 — multi_term_exact_search по ВСЕМ терминам сразу (1 вызов):\n"
+            f"[T] ШАГ 1 — multi_term_exact_search по ВСЕМ терминам сразу (1 вызов):\n"
             f"  1. multi_term_exact_search({terms_json})\n"
             f"     ↳ результаты ранжированы: сначала чанки со ВСЕМИ {len(expansion.key_terms)} терминами,\n"
             f"       затем с большинством, затем с меньшинством.\n"
@@ -366,7 +366,7 @@ def build_expanded_query(question: str, expansion: QueryExpansion) -> str:
         parts.append("")
 
         parts.append(
-            f"🎯 ШАГ 2 — дополнительный exact_search по каждому термину отдельно"
+            f"[T] ШАГ 2 — дополнительный exact_search по каждому термину отдельно"
             f" ({len(expansion.key_terms)} вызовов):"
         )
         for i, term in enumerate(expansion.key_terms, 1):
@@ -374,19 +374,19 @@ def build_expanded_query(question: str, expansion: QueryExpansion) -> str:
         parts.append("")
 
     if expansion.rephrased_queries:
-        parts.append(f"🔄 semantic_search — каждая формулировка отдельным вызовом ({len(expansion.rephrased_queries)} вызовов):")
+        parts.append(f"[S] semantic_search — каждая формулировка отдельным вызовом ({len(expansion.rephrased_queries)} вызовов):")
         for i, q in enumerate(expansion.rephrased_queries, 1):
             parts.append(f'  {i}. semantic_search("{q}")')
         parts.append("")
 
     if expansion.synonyms:
-        parts.append(f"🔍 semantic_search — каждый синоним отдельным вызовом ({len(expansion.synonyms)} вызовов):")
+        parts.append(f"[~] semantic_search — каждый синоним отдельным вызовом ({len(expansion.synonyms)} вызовов):")
         for i, s in enumerate(expansion.synonyms, 1):
             parts.append(f'  {i}. semantic_search("{s}")')
         parts.append("")
 
     if expansion.regex_patterns:
-        parts.append(f"🔎 regex_search — каждый паттерн отдельным вызовом ({len(expansion.regex_patterns)} вызовов):")
+        parts.append(f"[R] regex_search — каждый паттерн отдельным вызовом ({len(expansion.regex_patterns)} вызовов):")
         for i, p in enumerate(expansion.regex_patterns, 1):
             parts.append(f'  {i}. regex_search("{p}")')
         parts.append("")
@@ -432,7 +432,7 @@ def build_refined_query(
 
     # High-priority: missing aspects as exact + semantic
     if evaluation.missing_aspects:
-        parts.append(f"❗ ПРИОРИТЕТ — нераскрытые аспекты ({len(evaluation.missing_aspects)} аспекта/ов):")
+        parts.append(f"[!] ПРИОРИТЕТ — нераскрытые аспекты ({len(evaluation.missing_aspects)} аспекта/ов):")
         for aspect in evaluation.missing_aspects:
             call_n += 1
             parts.append(f'  {call_n}. exact_search("{aspect}")')
@@ -444,28 +444,28 @@ def build_refined_query(
     # Second half of rephrased queries (first half used in pass 1)
     alt_queries = expansion.rephrased_queries[len(expansion.rephrased_queries) // 2:]
     if alt_queries:
-        parts.append(f"🔄 Дополнительные semantic_search ({len(alt_queries)} вызовов):")
+        parts.append(f"[S] Дополнительные semantic_search ({len(alt_queries)} вызовов):")
         for q in alt_queries:
             call_n += 1
             parts.append(f'  {call_n}. semantic_search("{q}")')
         parts.append("")
 
     if expansion.key_terms:
-        parts.append(f"🎯 exact_search по ключевым терминам ({len(expansion.key_terms)} вызовов):")
+        parts.append(f"[T] exact_search по ключевым терминам ({len(expansion.key_terms)} вызовов):")
         for term in expansion.key_terms:
             call_n += 1
             parts.append(f'  {call_n}. exact_search("{term}")')
         parts.append("")
 
     if expansion.synonyms:
-        parts.append(f"🔍 semantic_search по синонимам ({len(expansion.synonyms)} вызовов):")
+        parts.append(f"[~] semantic_search по синонимам ({len(expansion.synonyms)} вызовов):")
         for s in expansion.synonyms:
             call_n += 1
             parts.append(f'  {call_n}. semantic_search("{s}")')
         parts.append("")
 
     if expansion.regex_patterns:
-        parts.append(f"🔎 regex_search по паттернам ({len(expansion.regex_patterns)} вызовов):")
+        parts.append(f"[R] regex_search по паттернам ({len(expansion.regex_patterns)} вызовов):")
         for p in expansion.regex_patterns:
             call_n += 1
             parts.append(f'  {call_n}. regex_search("{p}")')
@@ -611,7 +611,7 @@ def run_with_refinement(
             "AGENT PASS 1 START  (расширенный запрос)",
             f"Длина запроса: {len(expanded_q)} символов\n"
             f"Режим памяти: {mem_hint_note}\n"
-            f"Начало запроса: {expanded_q[:300]}",
+            f"Начало запроса: {expanded_q}",
         )
 
     raw1: dict = run_agent_fn(
@@ -663,7 +663,7 @@ def run_with_refinement(
             f"Нераскрытых аспектов из оценки: {len(ev1.missing_aspects)}\n"
             f"Длина запроса: {len(refined_q)} символов\n"
             f"Фокус: {'; '.join(ev1.missing_aspects[:5]) or '—'}\n"
-            f"Начало запроса: {refined_q[:300]}",
+            f"Начало запроса: {refined_q}",
         )
 
     # ── Pass 2: refined query, no memory, no auto-save ──────────────────────

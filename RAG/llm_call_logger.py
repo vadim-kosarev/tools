@@ -1,22 +1,22 @@
-"""LLM call logger — writes prompts and responses to a single local file.
+"""LLM call logger - writes prompts and responses to a single local file.
 
 When enabled (LLM_LOG_ENABLED=true in .env), every LLM call, tool call and
 pipeline stage transition is recorded to a single file with visually distinct
 separators that make it easy to follow how context evolves.
 
 Visual conventions:
-    ══════  (=): LLM REQUEST / RESPONSE blocks   — most prominent
-    ──────  (-): TOOL REQUEST / RESPONSE blocks  — medium
-    ######  (#): PIPELINE STAGE markers          — prominent, different char
-    ~~~~~~  (~): end-of-block footer             — common closing line
+    ......  (.): LLM REQUEST / RESPONSE blocks   - most prominent
+    ------  (-): TOOL REQUEST / RESPONSE blocks  - medium
+    ______  (_): PIPELINE STAGE markers          - prominent, different char
+    ~~~~~~  (~): end-of-block footer             - common closing line
 
 File created in the log directory:
-    _rag_llm.log   — chronological stream of all events
+    _rag_llm.log   - chronological stream of all events
 
 Each LLM block:
-    ================================================================================
+    ................................................................................
       #001  2026-04-25 12:00:00  [EXPAND_QUERY]  REQUEST
-    ================================================================================
+    ................................................................................
     <prompt content>
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       end #001 REQUEST
@@ -25,15 +25,15 @@ Each TOOL block:
     --------------------------------------------------------------------------------
       #002  2026-04-25 12:00:01  [TOOL:semantic_search]  REQUEST
     --------------------------------------------------------------------------------
-    {"query": "БДКО описание"}
+    {"query": "BDKO description"}
     ..............  end #002 REQUEST  ..............
 
 Each STAGE block:
-    ################################################################################
+    ________________________________________________________________________________
     ##  2026-04-25 12:00:05  QUERY EXPANSION COMPLETE
-    ##    Rephrased (5): "база данных КЕ"; "реестр объектов КЦОИ"...
-    ##    Key terms: БДКО, КЦОИ, Active Directory
-    ################################################################################
+    ##    Rephrased (5): "database KE"; "object registry KCOI"...
+    ##    Key terms: BDKO, KCOI, Active Directory
+    ________________________________________________________________________________
 
 Usage:
     with llm_logger.record("analyze_query") as rec:
@@ -66,9 +66,9 @@ _DEFAULT_LOG_DIR = Path(__file__).parent / "logs"
 _LOG_FILE = "_rag_llm.log"
 
 _W = 80                      # line width for separators
-_SEP_LLM   = "=" * _W        # LLM calls  (prominent double-line feel)
+_SEP_LLM   = "." * _W        # LLM calls  (prominent double-line feel)
 _SEP_TOOL  = "-" * _W        # tool calls (single-line)
-_SEP_STAGE = "#" * _W        # pipeline stage markers
+_SEP_STAGE = "_" * _W        # pipeline stage markers
 _SEP_END   = "~" * _W        # block end / footer
 
 
@@ -79,35 +79,76 @@ class _CallRecord:
         self.step    = step
         self.number  = number
         self._logger = logger
+        self._streaming_started = False
+        self._stream_buffer: list[str] = []
 
     def set_request(self, text: str) -> None:
         """Write REQUEST block to log immediately."""
         self._logger._write(self.number, self.step, "REQUEST", text)
 
+    def append_token(self, token: str, to_console: bool = True) -> None:
+        """Append a streaming token to the response buffer.
+
+        Writes token to file incrementally and optionally to console.
+        Must be followed by finalize_response() to close the RESPONSE block.
+
+        Args:
+            token: Text token to append
+            to_console: If True, print token to stdout immediately
+        """
+        if not self._streaming_started:
+            # Write RESPONSE block header on first token
+            self._logger._write_streaming_header(self.number, self.step)
+            self._streaming_started = True
+
+        self._stream_buffer.append(token)
+        self._logger._append_streaming_token(token)
+
+        if to_console:
+            print(token, end='', flush=True)
+
+    def finalize_response(self) -> None:
+        """Close the streaming RESPONSE block with footer."""
+        if self._streaming_started:
+            self._logger._write_streaming_footer(self.number)
+            if self._stream_buffer:  # Print newline after streaming output
+                print()  # newline after streamed response
+
     def set_response(self, text: str) -> None:
-        """Write RESPONSE block to log immediately."""
-        self._logger._write(self.number, self.step, "RESPONSE", text)
+        """Write RESPONSE block to log immediately (non-streaming mode)."""
+        if self._streaming_started:
+            # Already streamed, just finalize
+            self.finalize_response()
+        else:
+            self._logger._write(self.number, self.step, "RESPONSE", text)
 
 
 class LlmCallLogger:
     """Thread-safe sequential logger for LLM requests, responses, and pipeline stages.
 
     Visual hierarchy in the log file:
-        LLM blocks  — bounded by ═══ lines (most prominent)
-        TOOL blocks — bounded by ─── lines
-        STAGE marks — bounded by ### lines (pipeline stage transitions)
+        LLM blocks  - bounded by ... lines (most prominent)
+        TOOL blocks - bounded by --- lines
+        STAGE marks - bounded by ___ lines (pipeline stage transitions)
 
     Each call to set_request / set_response flushes to disk immediately
     so the log file is always up-to-date even during long LLM inference.
 
+    Streaming mode:
+        When LLM uses streaming generation (ChatOllama with streaming=True),
+        tokens are written to the log file and printed to console incrementally
+        as they arrive, providing live feedback during generation.
+
     Args:
         enabled: If False all operations are no-ops (zero overhead).
         log_dir: Directory for the log file (created automatically).
+        stream_to_console: If True, print streaming tokens to stdout in real-time.
     """
 
-    def __init__(self, enabled: bool = False, log_dir: Path = _DEFAULT_LOG_DIR) -> None:
+    def __init__(self, enabled: bool = False, log_dir: Path = _DEFAULT_LOG_DIR, stream_to_console: bool = True) -> None:
         self._enabled = enabled
         self._log_dir = log_dir
+        self._stream_to_console = stream_to_console
         self._counter = 0
         self._lock    = threading.Lock()
 
@@ -123,9 +164,9 @@ class LlmCallLogger:
         """Append one block to the log file and flush immediately.
 
         Visual style depends on block type:
-          • LLM_CALL / custom → ═══ borders, ~~~ footer
-          • TOOL:*            → ─── borders, ··· end marker
-          • EVENT             → ### border (reuses log_stage format)
+          - LLM_CALL / custom -> ... borders, ~~~ footer
+          - TOOL:*            -> --- borders, ... end marker
+          - EVENT             -> ___ border (reuses log_stage format)
         """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         is_tool  = step.startswith("TOOL:")
@@ -155,19 +196,50 @@ class LlmCallLogger:
                 f.write(block)
                 f.flush()
 
+    def _write_streaming_header(self, number: int, step: str) -> None:
+        """Write RESPONSE block header for streaming mode (without closing footer)."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header = f"  #{number:03d}  {ts}  [{step}]  RESPONSE"
+        block = f"\n{_SEP_LLM}\n{header}\n{_SEP_LLM}\n"
+
+        path = self._log_dir / _LOG_FILE
+        with self._lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(block)
+                f.flush()
+
+    def _append_streaming_token(self, token: str) -> None:
+        """Append a single token to the currently open streaming response."""
+        path = self._log_dir / _LOG_FILE
+        with self._lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(token)
+                f.flush()
+
+    def _write_streaming_footer(self, number: int) -> None:
+        """Write closing footer for streaming RESPONSE block."""
+        end = f"  end #{number:03d} RESPONSE"
+        block = f"\n{_SEP_END}\n{end}\n"
+
+        path = self._log_dir / _LOG_FILE
+        with self._lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(block)
+                f.flush()
+
     def log_stage(self, stage: str, details: str = "") -> None:
-        """Write a pipeline stage annotation with ### border.
+        """Write a pipeline stage annotation with ___ border.
 
         Use before/after each major operation so the log clearly shows the
         pipeline progression and what context was built at each step.
 
         Example stages:
-            "QUERY EXPANSION START"    — before expand_query()
-            "QUERY EXPANSION COMPLETE" — with rephrased queries + key terms
-            "AGENT PASS 1 START"       — with expanded query summary
-            "AGENT PASS 1 COMPLETE"    — with tool call count and answer length
-            "EVALUATION 1 COMPLETE"    — relevance/completeness/missing aspects
-            "REFINEMENT COMPLETE"      — quality delta and best pass
+            "QUERY EXPANSION START"    - before expand_query()
+            "QUERY EXPANSION COMPLETE" - with rephrased queries + key terms
+            "AGENT PASS 1 START"       - with expanded query summary
+            "AGENT PASS 1 COMPLETE"    - with tool call count and answer length
+            "EVALUATION 1 COMPLETE"    - relevance/completeness/missing aspects
+            "REFINEMENT COMPLETE"      - quality delta and best pass
 
         Args:
             stage:   Short stage name (one line, shown on header line).
@@ -194,7 +266,7 @@ class LlmCallLogger:
 
         Use this for chunk search queries, retrieved results, and other
         pipeline events that are not LLM calls.
-        Rendered with ### borders (same as log_stage).
+        Rendered with ___ borders (same as log_stage).
 
         Args:
             step: Short label for this event (shown as stage name).
@@ -242,7 +314,7 @@ def _fmt_message_list(messages: list[list[BaseMessage]], model_name: str = "") -
     """Formats a nested list of LangChain messages into a readable log string."""
     parts: list[str] = []
     if model_name:
-        parts.append(f"Model: {model_name}\n{'─' * 40}")
+        parts.append(f"Model: {model_name}\n{'-' * 40}")
     for msg_list in messages:
         for msg in msg_list:
             role = type(msg).__name__.replace("Message", "").upper()
@@ -284,12 +356,12 @@ class LangChainFileLogger(BaseCallbackHandler):
     """LangChain callback handler that writes LLM calls and tool calls to LlmCallLogger.
 
     Intercepts:
-      - on_chat_model_start  → logs full message list as REQUEST
-      - on_llm_end           → logs generated text (with tool_calls) as RESPONSE
-      - on_llm_error         → logs error as RESPONSE
-      - on_tool_start        → logs tool name + input as REQUEST
-      - on_tool_end          → logs tool output as RESPONSE
-      - on_tool_error        → logs error as RESPONSE
+      - on_chat_model_start  -> logs full message list as REQUEST
+      - on_llm_end           -> logs generated text (with tool_calls) as RESPONSE
+      - on_llm_error         -> logs error as RESPONSE
+      - on_tool_start        -> logs tool name + input as REQUEST
+      - on_tool_end          -> logs tool output as RESPONSE
+      - on_tool_error        -> logs error as RESPONSE
 
     Each LLM / tool invocation gets a unique sequential number so REQUEST
     and RESPONSE blocks can be matched by number in the log file.
@@ -309,11 +381,12 @@ class LangChainFileLogger(BaseCallbackHandler):
         super().__init__()
         self._log = file_logger
         self._step_prefix = step_prefix
-        # run_id (str) -> _CallRecord; separate dicts to avoid collisions
+        # run_id (str) -> _CallRecord
         self._llm_records: dict[str, _CallRecord] = {}
-        self._tool_records: dict[str, _CallRecord] = {}
+        # run_id (str) -> (record, input_str) so we can prepend args to RESPONSE
+        self._tool_records: dict[str, tuple[_CallRecord, str]] = {}
 
-    # ── LLM events ────────────────────────────────────────────────────────
+    # -- LLM events ------------------------------------------------------------
 
     def on_chat_model_start(
         self,
@@ -344,7 +417,28 @@ class LangChainFileLogger(BaseCallbackHandler):
         rec = self._llm_records.pop(str(run_id), None)
         if rec is None:
             return
-        rec.set_response(_fmt_llm_result(response))
+
+        # If streaming was used, finalize; otherwise write full response
+        if rec._streaming_started:
+            rec.finalize_response()
+        else:
+            rec.set_response(_fmt_llm_result(response))
+
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        run_id: UUID,
+        **kwargs: Any,
+    ) -> None:
+        """Called for each new token during streaming generation.
+
+        Writes token to file immediately and prints to console for live output
+        (if stream_to_console is enabled in the logger).
+        """
+        rec = self._llm_records.get(str(run_id))
+        if rec:
+            rec.append_token(token, to_console=self._log._stream_to_console)
 
     def on_llm_error(
         self,
@@ -355,9 +449,14 @@ class LangChainFileLogger(BaseCallbackHandler):
     ) -> None:
         rec = self._llm_records.pop(str(run_id), None)
         if rec:
-            rec.set_response(f"ERROR: {error}")
+            if rec._streaming_started:
+                # Streaming was in progress, finalize and append error
+                self._log._append_streaming_token(f"\n\nERROR: {error}")
+                rec.finalize_response()
+            else:
+                rec.set_response(f"ERROR: {error}")
 
-    # ── Tool events ────────────────────────────────────────────────────────
+    # -- Tool events -----------------------------------------------------------
 
     def on_tool_start(
         self,
@@ -372,7 +471,7 @@ class LangChainFileLogger(BaseCallbackHandler):
         tool_name = serialized.get("name", "tool")
         rec = self._log.start_record(f"TOOL:{tool_name}")
         rec.set_request(input_str)
-        self._tool_records[str(run_id)] = rec
+        self._tool_records[str(run_id)] = (rec, input_str)
 
     def on_tool_end(
         self,
@@ -381,9 +480,12 @@ class LangChainFileLogger(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
-        rec = self._tool_records.pop(str(run_id), None)
-        if rec:
-            rec.set_response(str(output))
+        entry = self._tool_records.pop(str(run_id), None)
+        if entry:
+            rec, input_str = entry
+            # Prepend full arguments to response for easier log reading
+            response_text = f"[args]\n{input_str}\n{'-' * 40}\n{str(output)}"
+            rec.set_response(response_text)
 
     def on_tool_error(
         self,
@@ -392,6 +494,7 @@ class LangChainFileLogger(BaseCallbackHandler):
         run_id: UUID,
         **kwargs: Any,
     ) -> None:
-        rec = self._tool_records.pop(str(run_id), None)
-        if rec:
-            rec.set_response(f"ERROR: {error}")
+        entry = self._tool_records.pop(str(run_id), None)
+        if entry:
+            rec, input_str = entry
+            rec.set_response(f"[args]\n{input_str}\n{'-' * 40}\nERROR: {error}")

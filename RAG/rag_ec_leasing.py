@@ -39,6 +39,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings, ChatOllama
+from logging_config import setup_logging as _setup_logging
 
 load_dotenv()
 
@@ -362,6 +363,9 @@ def run_interactive_chat(llm_chain, vectorstore, chroma_client) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Настраиваем логирование в файл + консоль
+    _setup_logging("rag_ec_leasing")
+
     logger.info(
         f"Запуск Hybrid RAG-чата\n"
         f"  LLM модель:   {settings.ollama_model}\n"

@@ -51,22 +51,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    stream=sys.stderr,
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_ollama import ChatOllama
 
 import rag_chat
 from rag_chat import SEP, build_vectorstore, settings
 from clickhouse_store import ClickHouseVectorStore
-from kb_tools import create_kb_tools
+from kb_tools import create_kb_tools, ALL_TOOLS, AGENT_SELECTABLE_TOOLS
 from llm_call_logger import LangChainFileLogger, LlmCallLogger
 from query_refiner import (
     AnswerEvaluation,
@@ -82,8 +74,9 @@ from session_memory import (
     extract_key_sections,
     format_memory_hint,
 )
+from logging_config import setup_logging
 
-logger = logging.getLogger(__name__)
+logger = setup_logging("rag_lc_agent")
 
 # ---------------------------------------------------------------------------
 # LLM call logger (singleton per process)
@@ -99,6 +92,7 @@ def _get_llm_logger() -> LlmCallLogger:
         _llm_logger = LlmCallLogger(
             enabled=settings.llm_log_enabled,
             log_dir=Path(__file__).parent / "logs",
+            stream_to_console=True,  # Live output of LLM thinking
         )
     return _llm_logger
 
@@ -186,21 +180,21 @@ _SYSTEM_PROMPT_TEMPLATE = """\
   Если у тебя есть список из 2+ терминов для exact-поиска:
     Шаг 1. Вызови multi_term_exact_search([все термины]) — 1 вызов.
            Результаты уже ранжированы по числу совпадений:
-           ✅ ВСЕ термины → 🔸 большинство → 🔸 меньше.
+           [OK] ВСЕ термины → [-] большинство → [-] меньше.
            Начинай анализ с верхних результатов.
     Шаг 2. Для терминов, по которым верхние результаты не дали ответа,
            вызови exact_search("термин") отдельно.
 
-ПРАВИЛО 9 — ОБЯЗАТЕЛЬНЫЙ ПЕРЕБОР ВСЕХ ТЕРМИНОВ ИЗ БЛОКОВ 🎯 и 🔄 и 🔍.
+ПРАВИЛО 9 — ОБЯЗАТЕЛЬНЫЙ ПЕРЕБОР ВСЕХ ТЕРМИНОВ ИЗ БЛОКОВ [T] и [S] и [~].
   Если вопрос содержит блоки «━━━ ОБЯЗАТЕЛЬНЫЕ ПОИСКОВЫЕ ДЕЙСТВИЯ ━━━»
   или «━━━ УТОЧНЁННЫЙ ПОИСК ━━━» — это ПРЯМЫЕ ИНСТРУКЦИИ, не подсказки.
 
   АЛГОРИТМ:
-    Шаг 1. Прочитай список из блока 🎯 — вызови exact_search для КАЖДОГО термина
+    Шаг 1. Прочитай список из блока [T] — вызови exact_search для КАЖДОГО термина
            отдельным вызовом. Не объединяй термины.
-    Шаг 2. Прочитай список из блока 🔄 — вызови semantic_search для КАЖДОЙ
+    Шаг 2. Прочитай список из блока [S] — вызови semantic_search для КАЖДОЙ
            формулировки отдельным вызовом.
-    Шаг 3. Прочитай список из блока 🔍 — вызови semantic_search для КАЖДОГО
+    Шаг 3. Прочитай список из блока [~] — вызови semantic_search для КАЖДОГО
            синонима отдельным вызовом.
     Шаг 4. Дочитай найденные разделы через get_section_content (правило 8).
     Шаг 5. Только после всех этих вызовов формируй финальный ответ.
@@ -208,7 +202,44 @@ _SYSTEM_PROMPT_TEMPLATE = """\
   В запросе написано "Итого ожидается не менее N вызовов" — это минимум,
   которого нужно достичь. Делай именно столько вызовов, сколько указано.
 
-  НЕЛЬЗЯ пропускать пункты из блоков 🎯/🔄/🔍 ради экономии вызовов.
+  НЕЛЬЗЯ пропускать пункты из блоков [T]/[S]/[~] ради экономии вызовов.
+
+ПРАВИЛО 10 — АВТОМАТИЧЕСКОЕ РАСШИРЕНИЕ КОНТЕКСТА ДЛЯ ЗАГОЛОВКОВ СПИСКОВ. ⚠️
+  Проблема: exact_search часто находит ЗАГОЛОВОК списка/таблицы, но САМ СПИСОК
+  находится в следующих чанках, которые не содержат поисковый термин.
+  
+  ПРИЗНАКИ ЗАГОЛОВКА В НАЙДЕННОМ ЧАНКЕ:
+    - "установлены следующие"
+    - "включает в себя:"
+    - "состоит из:"
+    - "перечень:"
+    - "список:"
+    - чанк заканчивается на ":" без списка после
+    - номера списка (1), 2), 3)...) в начале следующей строки
+  
+  ОБЯЗАТЕЛЬНОЕ ДЕЙСТВИЕ при обнаружении заголовка:
+    ШАГ A) Используй get_section_content(source_file, section) для получения
+           ПОЛНОГО раздела. Это гарантирует, что ты увидишь весь список целиком.
+           
+    ШАГ Б) Если get_section_content не подходит (раздел слишком большой),
+           используй get_neighbor_chunks(source, line_start, before=5, after=15)
+           с параметром include_anchor=True (по умолчанию).
+           Это вернет якорный чанк (заголовок) + 15 чанков после него.
+           
+  ПРИМЕР правильной цепочки для вопроса "ПО на АРМ СОИБ":
+    1. exact_search("АРМ эксплуатационного персонала СОИБ") → нашёл чанк:
+       "На АРМ эксплуатационного персонала СОИБ КЦОИ установлены следующие
+        программные средства Лаборатории Касперского:"
+       ⚠️ Это ЗАГОЛОВОК! Ключевая фраза "установлены следующие".
+       
+    2. ОБЯЗАТЕЛЬНО вызвать get_section_content("file.md", "section") 
+       ИЛИ get_neighbor_chunks(source="file.md", line_start=1476, after=15)
+       → получить полный список ПО из следующих чанков
+       
+    3. Формируем ответ на основе ПОЛНЫХ данных (заголовок + список)
+  
+  НЕПРАВИЛЬНО: увидеть "установлены следующие" и ответить "информация не найдена".
+  ПРАВИЛЬНО: расширить контекст и получить сам список.
 
 ПРАВИЛО 3 — КАСКАДНЫЙ ПОИСК для вопросов "дай список/перечень/все X":
   Шаг A) exact_search("ключевое слово") БЕЗ фильтра chunk_type — ищем везде
@@ -406,7 +437,7 @@ def run_agent(
 
 
 # ---------------------------------------------------------------------------
-# Сборка агента (LangGraph create_react_agent)
+# Сборка агента (langchain.agents.create_agent)
 # ---------------------------------------------------------------------------
 
 def build_lc_agent(
@@ -417,7 +448,7 @@ def build_lc_agent(
     """
     Builds a LangGraph ReAct agent for knowledge base Q&A.
 
-    Uses langgraph.prebuilt.create_react_agent with a dynamic system prompt that
+    Uses langchain.agents.create_agent with a dynamic system prompt that
     embeds the real list of source files from ClickHouse so the agent never guesses
     filenames.
 
@@ -440,10 +471,10 @@ def build_lc_agent(
     system_prompt = _build_system_prompt(vectorstore)
     logger.debug(f"Системный промпт агента сформирован ({len(system_prompt)} символов)")
 
-    agent = create_react_agent(
+    agent = create_agent(
         model=llm,
         tools=tools,
-        prompt=system_prompt,
+        system_prompt=system_prompt,
     )
 
     logger.info(
@@ -536,7 +567,7 @@ def print_lc_agent_answer(
         print(f"\n{'─' * 50}")
         print(f"Tool calls: {len(tool_calls)}")
         for name, args_str, output_preview in tool_calls:
-            print(f"  🔧 {name}({args_str})")
+            print(f"  >> {name}({args_str})")
             print(f"     → {output_preview}...")
 
     print(f"\n{SEP}")
@@ -595,7 +626,7 @@ def run_with_evaluation(
             "AGENT PASS START",
             f"Длина запроса: {len(expanded_q)} символов\n"
             f"Память: {'есть' if memory else 'нет'}\n"
-            f"Начало: {expanded_q[:300]}",
+            f"Начало: {expanded_q}",
         )
 
     # ── Single agent pass ────────────────────────────────────────────────────
@@ -728,7 +759,7 @@ def print_evaluated_answer(
         print(f"\n{'─' * 50}")
         print(f"Tool calls: {total_tools}")
         for name, args_str, output_preview in tool_calls:
-            print(f"  🔧 {name}({args_str})")
+            print(f"  >> {name}({args_str})")
             print(f"     → {output_preview}...")
 
     print(f"\n{SEP}")
@@ -742,11 +773,11 @@ def print_evaluated_answer(
 
     # ── Evaluation footer ────────────────────────────────────────────────────
     r, c = evaluation.relevance_score, evaluation.completeness_score
-    r_icon = "✅" if r >= 8 else "⚠️" if r >= 5 else "❌"
-    c_icon = "✅" if c >= 8 else "⚠️" if c >= 5 else "❌"
+    r_icon = "[OK]" if r >= 8 else "[!]" if r >= 5 else "[x]"
+    c_icon = "[OK]" if c >= 8 else "[!]" if c >= 5 else "[x]"
     print(f"\n{r_icon} Релевантность: {r}/10   {c_icon} Полнота: {c}/10")
     if evaluation.missing_aspects:
-        print(f"⚠️  Нераскрытые аспекты: {'; '.join(evaluation.missing_aspects[:5])}")
+        print(f"[!]  Нераскрытые аспекты: {'; '.join(evaluation.missing_aspects[:5])}")
     print(f"[{evaluation.reasoning}]")
     print(SEP)
 
@@ -848,7 +879,7 @@ def run_interactive_chat(
 
         except Exception as exc:
             logger.error(f"Ошибка агента: {exc}", exc_info=True)
-            print(f"\n⚠️  Ошибка: {exc}")
+            print(f"\n[!]  Ошибка: {exc}")
 
 
 # ---------------------------------------------------------------------------

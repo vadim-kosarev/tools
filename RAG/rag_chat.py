@@ -351,12 +351,13 @@ PROMPT_TEMPLATE = """\
 
 
 def build_llm() -> ChatOllama:
-    """Создаёт экземпляр LLM."""
+    """Создаёт экземпляр LLM с поддержкой streaming для live-вывода."""
     return ChatOllama(
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
         temperature=0.1,
         num_predict=4096,
+        streaming=True,
     )
 
 
@@ -486,6 +487,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Настраиваем логирование в файл + консоль
+    _setup_logging("rag_chat")
+    
     args = parse_args()
 
     logger.info(

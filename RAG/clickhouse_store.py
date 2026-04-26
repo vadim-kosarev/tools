@@ -207,6 +207,8 @@ class ClickHouseVectorStore(VectorStore):
         query: str,
         k: int = 4,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Return top-k Documents most similar to query (cosine distance).
@@ -215,8 +217,12 @@ class ClickHouseVectorStore(VectorStore):
             query:      Natural language query string.
             k:          Number of results to return.
             chunk_type: Optional filter on chunk_type metadata field.
+            source:     Optional source file filter.
+            section:    Optional section substring filter.
         """
-        docs_scores = self.similarity_search_with_score(query, k=k, chunk_type=chunk_type)
+        docs_scores = self.similarity_search_with_score(
+            query, k=k, chunk_type=chunk_type, source=source, section=section
+        )
         return [doc for doc, _ in docs_scores]
 
     def similarity_search_with_score(
@@ -224,6 +230,8 @@ class ClickHouseVectorStore(VectorStore):
         query: str,
         k: int = 4,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
         **kwargs: Any,
     ) -> list[tuple[Document, float]]:
         """Return top-k (Document, distance) pairs for query.
@@ -232,26 +240,52 @@ class ClickHouseVectorStore(VectorStore):
         so the embedding space matches the indexed content.
         """
         query_vec = self._embedding.embed_query(normalize_for_embedding(query))
-        return self.similarity_search_by_vector_with_score(query_vec, k=k, chunk_type=chunk_type)
+        return self.similarity_search_by_vector_with_score(
+            query_vec, k=k, chunk_type=chunk_type, source=source, section=section
+        )
 
     def similarity_search_by_vector(
         self,
         embedding: list[float],
         k: int = 4,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
         **kwargs: Any,
     ) -> list[Document]:
         """Search by pre-computed embedding vector."""
-        return [doc for doc, _ in self.similarity_search_by_vector_with_score(embedding, k, chunk_type)]
+        return [
+            doc for doc, _ in self.similarity_search_by_vector_with_score(
+                embedding, k, chunk_type, source, section
+            )
+        ]
 
     def similarity_search_by_vector_with_score(
         self,
         embedding: list[float],
         k: int = 4,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
     ) -> list[tuple[Document, float]]:
         """Core vector search: cosineDistance ORDER BY ASC LIMIT k."""
-        where = f"WHERE chunk_type = '{chunk_type}'" if chunk_type is not None else ""
+        where_clauses = []
+        params: dict[str, Any] = {"query_vec": embedding, "k": k}
+        
+        if chunk_type is not None:
+            where_clauses.append("chunk_type = {ct:String}")
+            params["ct"] = chunk_type
+        
+        if source is not None:
+            where_clauses.append("source = {src:String}")
+            params["src"] = source
+        
+        if section is not None:
+            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            params["sec"] = section
+        
+        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        
         sql = f"""
             SELECT source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index,
@@ -261,10 +295,7 @@ class ClickHouseVectorStore(VectorStore):
             ORDER BY distance ASC
             LIMIT {{k:UInt32}}
         """
-        result = self._client.query(
-            sql,
-            parameters={"query_vec": embedding, "k": k},
-        )
+        result = self._client.query(sql, parameters=params)
         docs: list[tuple[Document, float]] = []
         for row in result.result_rows:
             source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index, distance = row
@@ -286,6 +317,8 @@ class ClickHouseVectorStore(VectorStore):
         substring: str,
         limit: int = 100,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
     ) -> list[Document]:
         """Case-insensitive exact substring search using positionCaseInsensitive.
 
@@ -293,8 +326,71 @@ class ClickHouseVectorStore(VectorStore):
             substring:  Text to search for in content.
             limit:      Maximum number of results.
             chunk_type: Optional chunk_type filter.
+            source:     Optional source file filter.
+            section:    Optional section substring filter.
         """
         where_clauses = ["positionCaseInsensitive(content, {sub:String}) > 0"]
+        params: dict[str, Any] = {"sub": substring, "lim": limit}
+        
+        if chunk_type is not None:
+            where_clauses.append("chunk_type = {ct:String}")
+            params["ct"] = chunk_type
+        
+        if source is not None:
+            where_clauses.append("source = {src:String}")
+            params["src"] = source
+        
+        if section is not None:
+            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            params["sec"] = section
+
+        order_by = "ORDER BY line_start, chunk_index" if source else ""
+        
+        sql = f"""
+            SELECT source, section, chunk_type, table_headers, content,
+                   line_start, line_end, chunk_index
+            FROM {self._cfg.database}.{self._cfg.table} FINAL
+            WHERE {" AND ".join(where_clauses)}
+            {order_by}
+            LIMIT {{lim:UInt32}}
+        """
+
+        result = self._client.query(sql, parameters=params)
+        docs: list[Document] = []
+        for row in result.result_rows:
+            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            meta: dict = {
+                "source":      source,
+                "section":     section,
+                "chunk_type":  chunk_type_val,
+                "line_start":  int(line_start),
+                "line_end":    int(line_end),
+                "chunk_index": int(chunk_index),
+            }
+            if table_headers:
+                meta["table_headers"] = table_headers
+            docs.append(Document(page_content=content, metadata=meta))
+        return docs
+
+    def exact_search_in_file(
+        self,
+        substring: str,
+        source_file: str,
+        limit: int = 100,
+        chunk_type: Optional[str] = None,
+    ) -> list[Document]:
+        """Case-insensitive exact substring search within a specific file.
+
+        Args:
+            substring:   Text to search for in content.
+            source_file: Source filename to search in.
+            limit:       Maximum number of results.
+            chunk_type:  Optional chunk_type filter.
+        """
+        where_clauses = [
+            "positionCaseInsensitive(content, {sub:String}) > 0",
+            "source = {file:String}"
+        ]
         if chunk_type is not None:
             where_clauses.append("chunk_type = {ct:String}")
 
@@ -303,9 +399,69 @@ class ClickHouseVectorStore(VectorStore):
                    line_start, line_end, chunk_index
             FROM {self._cfg.database}.{self._cfg.table} FINAL
             WHERE {" AND ".join(where_clauses)}
+            ORDER BY line_start, chunk_index
             LIMIT {{lim:UInt32}}
         """
-        params: dict[str, Any] = {"sub": substring, "lim": limit}
+        params: dict[str, Any] = {"sub": substring, "file": source_file, "lim": limit}
+        if chunk_type is not None:
+            params["ct"] = chunk_type
+
+        result = self._client.query(sql, parameters=params)
+        docs: list[Document] = []
+        for row in result.result_rows:
+            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            meta: dict = {
+                "source":      source,
+                "section":     section,
+                "chunk_type":  chunk_type_val,
+                "line_start":  int(line_start),
+                "line_end":    int(line_end),
+                "chunk_index": int(chunk_index),
+            }
+            if table_headers:
+                meta["table_headers"] = table_headers
+            docs.append(Document(page_content=content, metadata=meta))
+        return docs
+
+    def exact_search_in_file_section(
+        self,
+        substring: str,
+        source_file: str,
+        section_substring: str,
+        limit: int = 100,
+        chunk_type: Optional[str] = None,
+    ) -> list[Document]:
+        """Case-insensitive exact substring search within a specific file and section.
+
+        Args:
+            substring:          Text to search for in content.
+            source_file:        Source filename to search in.
+            section_substring:  Section name or breadcrumb substring to match.
+            limit:              Maximum number of results.
+            chunk_type:         Optional chunk_type filter.
+        """
+        where_clauses = [
+            "positionCaseInsensitive(content, {sub:String}) > 0",
+            "source = {file:String}",
+            "positionCaseInsensitive(section, {sec:String}) > 0"
+        ]
+        if chunk_type is not None:
+            where_clauses.append("chunk_type = {ct:String}")
+
+        sql = f"""
+            SELECT source, section, chunk_type, table_headers, content,
+                   line_start, line_end, chunk_index
+            FROM {self._cfg.database}.{self._cfg.table} FINAL
+            WHERE {" AND ".join(where_clauses)}
+            ORDER BY line_start, chunk_index
+            LIMIT {{lim:UInt32}}
+        """
+        params: dict[str, Any] = {
+            "sub": substring,
+            "file": source_file,
+            "sec": section_substring,
+            "lim": limit
+        }
         if chunk_type is not None:
             params["ct"] = chunk_type
 
@@ -331,6 +487,8 @@ class ClickHouseVectorStore(VectorStore):
         terms: list[str],
         limit: int = 100,
         chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+        section: Optional[str] = None,
     ) -> list[tuple[Document, int]]:
         """Multi-term exact search with per-chunk match-count scoring.
 
@@ -349,6 +507,8 @@ class ClickHouseVectorStore(VectorStore):
             terms:      List of substrings to search (case-insensitive).
             limit:      Maximum number of results to return.
             chunk_type: Optional chunk_type filter.
+            source:     Optional source file filter.
+            section:    Optional section substring filter.
 
         Returns:
             List of (Document, match_count) sorted by match_count DESC.
@@ -364,8 +524,20 @@ class ClickHouseVectorStore(VectorStore):
         )
 
         where_clauses = [f"({match_expr}) > 0"]
+        params: dict[str, Any] = {f"t{i}": term for i, term in enumerate(terms)}
+        params["lim"] = limit
+        
         if chunk_type is not None:
             where_clauses.append("chunk_type = {ct:String}")
+            params["ct"] = chunk_type
+        
+        if source is not None:
+            where_clauses.append("source = {src:String}")
+            params["src"] = source
+        
+        if section is not None:
+            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            params["sec"] = section
 
         sql = f"""
             SELECT source, section, chunk_type, table_headers, content,
@@ -376,10 +548,6 @@ class ClickHouseVectorStore(VectorStore):
             ORDER BY match_count DESC
             LIMIT {{lim:UInt32}}
         """
-        params: dict[str, Any] = {f"t{i}": term for i, term in enumerate(terms)}
-        params["lim"] = limit
-        if chunk_type is not None:
-            params["ct"] = chunk_type
 
         result = self._client.query(sql, parameters=params)
         docs: list[tuple[Document, int]] = []
@@ -397,6 +565,100 @@ class ClickHouseVectorStore(VectorStore):
                 meta["table_headers"] = table_headers
             docs.append((Document(page_content=content, metadata=meta), int(match_count)))
         return docs
+
+    def exact_search_sections(
+        self,
+        substring: str,
+        limit: int = 100,
+        chunk_type: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> list[tuple[str, str, int]]:
+        """Find all unique (source, section) pairs containing the substring.
+
+        Returns a list of sections where the term was found, with match counts.
+        Useful for discovering which sections contain relevant information
+        before doing detailed searches.
+
+        Args:
+            substring:  Text to search for in content.
+            limit:      Maximum number of chunks to scan (default 100).
+            chunk_type: Optional chunk_type filter.
+            source:     Optional source file filter.
+
+        Returns:
+            List of (source, section, match_count) tuples sorted by match_count DESC.
+            match_count = number of chunks in that section containing the term.
+        """
+        where_clauses = ["positionCaseInsensitive(content, {sub:String}) > 0"]
+        params: dict[str, Any] = {"sub": substring, "lim": limit}
+
+        if chunk_type is not None:
+            where_clauses.append("chunk_type = {ct:String}")
+            params["ct"] = chunk_type
+
+        if source is not None:
+            where_clauses.append("source = {src:String}")
+            params["src"] = source
+
+        # Subquery: get top limit chunks, then extract unique (source, section) with counts
+        sql = f"""
+            SELECT source, section, count() AS match_count
+            FROM (
+                SELECT source, section
+                FROM {self._cfg.database}.{self._cfg.table} FINAL
+                WHERE {" AND ".join(where_clauses)}
+                LIMIT {{lim:UInt32}}
+            )
+            GROUP BY source, section
+            ORDER BY match_count DESC, source, section
+        """
+
+        result = self._client.query(sql, parameters=params)
+        sections: list[tuple[str, str, int]] = []
+        for row in result.result_rows:
+            src, sec, cnt = row
+            sections.append((src, sec if sec else "<root>", int(cnt)))
+        return sections
+
+    def find_sections_by_name(
+        self,
+        name_substring: str,
+        source: Optional[str] = None,
+    ) -> list[tuple[str, str, int]]:
+        """Find sections where the section name contains the substring.
+
+        Searches in section names/breadcrumbs, not in content.
+        Useful for finding sections that match the user's query by title.
+
+        Args:
+            name_substring: Substring to search in section names (case-insensitive).
+            source:         Optional source file filter.
+
+        Returns:
+            List of (source, section, chunk_count) tuples.
+            chunk_count = total number of chunks in that section.
+        """
+        where_clauses = ["positionCaseInsensitive(section, {name:String}) > 0"]
+        params: dict[str, Any] = {"name": name_substring}
+
+        if source is not None:
+            where_clauses.append("source = {src:String}")
+            params["src"] = source
+
+        sql = f"""
+            SELECT source, section, count() AS chunk_count
+            FROM {self._cfg.database}.{self._cfg.table} FINAL
+            WHERE {" AND ".join(where_clauses)}
+            GROUP BY source, section
+            ORDER BY chunk_count DESC, source, section
+        """
+
+        result = self._client.query(sql, parameters=params)
+        sections: list[tuple[str, str, int]] = []
+        for row in result.result_rows:
+            src, sec, cnt = row
+            sections.append((src, sec if sec else "<root>", int(cnt)))
+        return sections
 
 
     def get_sample(

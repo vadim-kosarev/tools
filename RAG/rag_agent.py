@@ -1469,6 +1469,9 @@ def run_interactive_chat(vectorstore, llm: ChatOllama, knowledge_dir: Path) -> N
 def main() -> None:
     import sys
     import argparse
+    
+    # Настраиваем логирование в файл + консоль
+    _setup_logging("rag_agent")
 
     parser = argparse.ArgumentParser(description="Agentic RAG-чат по документации СОИБ КЦОИ")
     parser.add_argument("question", nargs="*", help="Вопрос (если не указан — интерактивный режим)")
