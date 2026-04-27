@@ -23,8 +23,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Путь к файлу с системным промптом
+# Пути к файлам с системными промптами
 _SYSTEM_PROMPT_FILE = Path(__file__).parent / "system_prompt.md"
+_REACT_AGENT_PROMPT_FILE = Path(__file__).parent / "system_prompt_react_agent.md"
 
 # Кэш загруженных промптов
 _PROMPT_CACHE: dict[str, str] = {}
@@ -98,8 +99,11 @@ def format_system_prompt(
 # Готовые промпты
 # ---------------------------------------------------------------------------
 
-# Аналитический агент (из system_prompt.md)
+# Аналитический агент (из system_prompt.md) - для LangGraph агента
 ANALYTICAL_AGENT_PROMPT = load_system_prompt()
+
+# ReAct агент (из system_prompt_react_agent.md) - для LangChain ReAct агента
+REACT_AGENT_PROMPT = load_system_prompt(_REACT_AGENT_PROMPT_FILE)
 
 # Fallback промпт на случай ошибки загрузки
 _FALLBACK_PROMPT = """# System Prompt для AI-Агента
@@ -212,7 +216,8 @@ def get_available_prompts() -> dict[str, str]:
         Словарь {имя: описание}
     """
     return {
-        "analytical_agent": "Аналитический агент с JSON структурой (из system_prompt.md)",
+        "analytical_agent": "Аналитический агент с JSON структурой (из system_prompt.md) - для LangGraph агента",
+        "react_agent": "ReAct агент для LangChain (из system_prompt_react_agent.md) - с инструментами и tool calling",
         "simple_chat": "Простой чат без структурированного ответа",
         "query_expansion": "Расширение запроса для поиска",
         "answer_evaluation": "Оценка качества ответа",
@@ -224,7 +229,7 @@ def get_prompt_by_name(name: str) -> str:
     Получить промпт по имени.
 
     Args:
-        name: Имя промпта (analytical_agent, simple_chat, etc.)
+        name: Имя промпта (analytical_agent, react_agent, simple_chat, etc.)
 
     Returns:
         Текст промпта
@@ -234,6 +239,7 @@ def get_prompt_by_name(name: str) -> str:
     """
     prompts = {
         "analytical_agent": ANALYTICAL_AGENT_PROMPT,
+        "react_agent": REACT_AGENT_PROMPT,
         "simple_chat": SIMPLE_CHAT_PROMPT,
         "query_expansion": QUERY_EXPANSION_PROMPT,
         "answer_evaluation": ANSWER_EVALUATION_PROMPT,

@@ -190,11 +190,86 @@ def _get_llm_logger() -> LlmCallLogger:
 # Загрузка system prompt из файла
 # ---------------------------------------------------------------------------
 
+_TOOLS_JSON_CACHE: str | None = None  # Кэш для JSON списка инструментов
+
+def _build_tools_json() -> str:
+    """
+    Генерирует JSON со списком доступных инструментов и их параметрами.
+    Использует Pydantic model_json_schema() для получения полной схемы параметров.
+    Результат кэшируется - генерация происходит ОДИН РАЗ при загрузке промпта.
+    
+    Returns:
+        JSON строка с массивом инструментов
+    """
+    global _TOOLS_JSON_CACHE
+
+    if _TOOLS_JSON_CACHE is not None:
+        return _TOOLS_JSON_CACHE
+
+    tool_registry = get_tool_registry()
+    
+    # Создаем временный экземпляр tools чтобы получить args_schema
+    temp_tools = []
+    try:
+        import rag_chat
+        temp_vectorstore = rag_chat.build_vectorstore()
+        knowledge_dir = Path(rag_chat.settings.knowledge_dir)
+        temp_tools = create_kb_tools(temp_vectorstore, knowledge_dir)
+        logger.info(f"Получено {len(temp_tools)} инструментов для генерации JSON")
+    except Exception as e:
+        logger.warning(f"Не удалось получить схемы параметров инструментов: {e}")
+    
+    # Создаем словарь {tool_name: args_schema}
+    tool_schemas = {}
+    for tool in temp_tools:
+        if hasattr(tool, 'name') and hasattr(tool, 'args_schema'):
+            tool_schemas[tool.name] = tool.args_schema
+    
+    # Формируем массив инструментов с параметрами
+    tools_list = []
+    for tool_name, description in tool_registry.items():
+        tool_info = {
+            "name": tool_name,
+            "description": description,
+            "parameters": {}
+        }
+
+        # Добавляем схему параметров если доступна
+        if tool_name in tool_schemas:
+            schema = tool_schemas[tool_name]
+            if schema and hasattr(schema, 'model_json_schema'):
+                # Получаем JSON Schema из Pydantic
+                json_schema = schema.model_json_schema()
+                # Извлекаем properties и required
+                tool_info["parameters"] = {
+                    "type": "object",
+                    "properties": json_schema.get("properties", {}),
+                    "required": json_schema.get("required", [])
+                }
+        
+        tools_list.append(tool_info)
+
+    # Сериализуем в JSON с отступами для читаемости
+    result = json.dumps(tools_list, ensure_ascii=False, indent=2)
+    _TOOLS_JSON_CACHE = result
+    logger.info(f"Сгенерирован JSON списка инструментов: {len(result)} символов, {len(tools_list)} инструментов")
+    return result
+
+
 def _load_system_prompt() -> str:
-    """Загружает system_prompt.md как базовый промпт для агента."""
+    """
+    Загружает system_prompt.md как базовый промпт для агента.
+    Подставляет динамический список инструментов в JSON формате.
+    """
     prompt_path = Path(__file__).parent / "system_prompt.md"
     if prompt_path.exists():
-        return prompt_path.read_text(encoding="utf-8")
+        prompt_template = prompt_path.read_text(encoding="utf-8")
+        
+        # Подставляем JSON со списком инструментов
+        tools_json = _build_tools_json()
+        prompt = prompt_template.replace("{available_tools}", tools_json)
+        
+        return prompt
     else:
         logger.warning(f"system_prompt.md не найден в {prompt_path}")
         return "Ты - аналитический AI-агент"
@@ -247,14 +322,6 @@ def _fix_tool_args(tool_name: str, tool_input: dict) -> dict:
     return fixed
 
 
-def _format_tools_list() -> str:
-    """Форматирует список доступных инструментов из реестра для промпта."""
-    tool_registry = get_tool_registry()
-    lines = ["Доступные инструменты:"]
-    for tool_name, description in tool_registry.items():
-        lines.append(f"- {tool_name}: {description}")
-    return "\n".join(lines)
-
 
 # ---------------------------------------------------------------------------
 # Узлы графа (Nodes) - следуют system_prompt.md
@@ -262,7 +329,7 @@ def _format_tools_list() -> str:
 
 def plan_node(state: AgentState) -> AgentState:
     """
-    Узел 1: PLAN
+    Узел 1: PLANq
     Анализирует вопрос и формирует план поиска.
     Возвращает статус 'plan' с перечнем шагов.
     """
@@ -282,7 +349,6 @@ def plan_node(state: AgentState) -> AgentState:
 
 ТЕКУЩИЙ ЭТАП: plan
 
-{_format_tools_list()}
 
 Сформируй план поиска для ответа на вопрос пользователя.
 Учти, что после первого поиска будет возможность сделать уточняющие запросы."""
@@ -376,7 +442,6 @@ def action_node(state: AgentState) -> AgentState:
 Выбери 2-4 инструмента для {"уточняющего" if iteration > 1 else "первичного"} поиска.
 {"Используй targeted tools: find_relevant_sections, get_chunks_by_index, exact_search_in_file_section" if iteration > 1 else ""}
 
-{_format_tools_list()}
 
 Примеры параметров:
 - semantic_search: {{"query": "текст запроса", "top_k": 10}}
