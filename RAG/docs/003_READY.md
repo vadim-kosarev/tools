@@ -38,8 +38,7 @@ START → plan_node → action_node → observation_node → final_node → END
 ```
 
 **Ключевые особенности:**
-- ✅ Один проход без итераций
-- ✅ Следует `system_prompt.md` (загружается из файла)
+- ✅ Один проход без итераций- ✅ Следует `system_prompt.md` (загружается из файла)
 - ✅ JSON ответы по строгой схеме: `{"status": "plan|action|observation|final", ...}`
 - ✅ Параллельное выполнение 2-4 tools
 - ✅ **ПОЛНОЕ логирование всех messages** в `logs/_rag_llm.log`
@@ -717,5 +716,5 @@ else:
 **Документация:**
 - 📖 [doc/RAG_LG_AGENT_V2.md](doc/RAG_LG_AGENT_V2.md) - архитектура агента
 - 📖 [doc/RAG_LG_AGENT_REFACTORING.md](doc/RAG_LG_AGENT_REFACTORING.md) - детали рефакторинга
-- 📖 [README.md](README.md) - обновлённая таблица режимов
+- 📖 [005_README.md](005_README.md) - обновлённая таблица режимов
 

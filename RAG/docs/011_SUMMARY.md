@@ -58,10 +58,10 @@ python test_message_history.py
 ## Файлы
 
 - ✏️ `rag_lg_agent.py` - основной код
-- 📄 `docs/004_message_history_fix.md` - подробное описание
-- 📝 `CHANGELOG.md` - история изменений
+- 📄 `004_message_history_fix.md` - подробное описание
+- 📝 `014_CHANGELOG.md` - история изменений
 - 🧪 `test_message_history.py` - тестовый скрипт
-- 📋 `SUMMARY.md` - этот файл
+- 📋 `011_SUMMARY.md` - этот файл
 
 ## Важно
 

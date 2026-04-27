@@ -114,9 +114,10 @@ result = structured_llm.invoke(messages, config=invoke_config)
 
 ## Документация
 
-- 📄 **Подробное описание:** `docs/004_message_history_fix.md`
-- 📝 **Краткая сводка:** `docs/SUMMARY.md`
-- 📋 **История изменений:** `CHANGELOG.md`
+- 📄 **Подробное описание:** `004_message_history_fix.md`
+- 📝 **Краткая сводка:** `011_SUMMARY.md`
+- 📋 **История изменений:** `014_CHANGELOG.md`
+- 🎯 **Итоговый отчет:** `013_TASK_COMPLETE.md`
 - 🧪 **Тест:** `test_message_history.py`
 
 ---

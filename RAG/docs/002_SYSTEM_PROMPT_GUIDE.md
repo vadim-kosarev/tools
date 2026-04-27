@@ -195,5 +195,5 @@ python system_prompts.py --show analytical_agent
 - [`system_prompts.py`](./system_prompts.py) — модуль загрузки промптов
 - [`example_analytical_agent.py`](./example_analytical_agent.py) — готовый пример агента
 - [`llm_messages.py`](./llm_messages.py) — работа с messages
-- [`README.md`](./README.md#-системный-промпт-для-аналитического-агента) — основная документация
+- [`005_README.md`](./005_README.md#-системный-промпт-для-аналитического-агента) — основная документация
 

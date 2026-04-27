@@ -81,11 +81,14 @@ class _CallRecord:
         self._logger = logger
         self._streaming_started = False
         self._stream_buffer: list[str] = []
+        self._streaming_file_path: Path | None = None  # Путь к файлу для streaming
 
     def set_request(self, text: str) -> None:
-        """Write REQUEST block to log immediately."""
-        self._logger._write(self.number, self.step, "REQUEST", text)
-
+        """Write REQUEST block to log immediately with unique number."""
+        # Получаем новый уникальный номер для request
+        request_num = self._logger._next_number()
+        self._logger._write(request_num, self.step, "REQUEST", text)
+    
     def append_token(self, token: str, to_console: bool = True) -> None:
         """Append a streaming token to the response buffer.
 
@@ -97,12 +100,15 @@ class _CallRecord:
             to_console: If True, print token to stdout immediately
         """
         if not self._streaming_started:
+            # Get new unique number for streaming response header
+            response_num = self._logger._next_number()
             # Write RESPONSE block header on first token
-            self._logger._write_streaming_header(self.number, self.step)
+            self._streaming_file_path = self._logger._write_streaming_header(response_num, self.step)
             self._streaming_started = True
+            self.number = response_num  # Update number for footer
 
         self._stream_buffer.append(token)
-        self._logger._append_streaming_token(token)
+        self._logger._append_streaming_token(token, self._streaming_file_path)
 
         if to_console:
             print(token, end='', flush=True)
@@ -110,7 +116,43 @@ class _CallRecord:
     def finalize_response(self) -> None:
         """Close the streaming RESPONSE block with footer."""
         if self._streaming_started:
-            self._logger._write_streaming_footer(self.number)
+            self._logger._write_streaming_footer(self.number, self._streaming_file_path)
+            if self._stream_buffer:  # Print newline after streaming output
+                print()  # newline after streamed response
+
+    def set_response(self, text: str) -> None:
+        """Write RESPONSE block to log immediately (non-streaming mode)."""
+        if self._streaming_started:
+            # Already streamed, just finalize
+            self.finalize_response()
+        else:
+            # Get new unique number for response
+            response_num = self._logger._next_number()
+            self._logger._write(response_num, self.step, "RESPONSE", text)
+        """Append a streaming token to the response buffer.
+
+        Writes token to file incrementally and optionally to console.
+        Must be followed by finalize_response() to close the RESPONSE block.
+
+        Args:
+            token: Text token to append
+            to_console: If True, print token to stdout immediately
+        """
+        if not self._streaming_started:
+            # Write RESPONSE block header on first token
+            self._streaming_file_path = self._logger._write_streaming_header(self.number, self.step)
+            self._streaming_started = True
+
+        self._stream_buffer.append(token)
+        self._logger._append_streaming_token(token, self._streaming_file_path)
+
+        if to_console:
+            print(token, end='', flush=True)
+
+    def finalize_response(self) -> None:
+        """Close the streaming RESPONSE block with footer."""
+        if self._streaming_started:
+            self._logger._write_streaming_footer(self.number, self._streaming_file_path)
             if self._stream_buffer:  # Print newline after streaming output
                 print()  # newline after streamed response
 
@@ -143,12 +185,20 @@ class LlmCallLogger:
         enabled: If False all operations are no-ops (zero overhead).
         log_dir: Directory for the log file (created automatically).
         stream_to_console: If True, print streaming tokens to stdout in real-time.
+        separate_files: If True, write each request/response to separate numbered files.
     """
 
-    def __init__(self, enabled: bool = False, log_dir: Path = _DEFAULT_LOG_DIR, stream_to_console: bool = True) -> None:
+    def __init__(
+        self,
+        enabled: bool = False,
+        log_dir: Path = _DEFAULT_LOG_DIR,
+        stream_to_console: bool = True,
+        separate_files: bool = True
+    ) -> None:
         self._enabled = enabled
         self._log_dir = log_dir
         self._stream_to_console = stream_to_console
+        self._separate_files = separate_files
         self._counter = 0
         self._lock    = threading.Lock()
 
@@ -167,9 +217,12 @@ class LlmCallLogger:
           - LLM_CALL / custom -> ... borders, ~~~ footer
           - TOOL:*            -> --- borders, ... end marker
           - EVENT             -> ___ border (reuses log_stage format)
+
+        If separate_files=True, writes to individual numbered files:
+          001_llm_request.log, 002_llm_response.log, 003_tool_request.log, etc.
         """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        is_tool  = step.startswith("TOOL:")
+        is_tool  = step.startswith("TOOL:") or step.startswith("DB:")
         is_event = kind == "EVENT"
 
         if is_event:
@@ -190,42 +243,105 @@ class LlmCallLogger:
                 f"{_SEP_END}\n{end}\n"
             )
 
-        path = self._log_dir / _LOG_FILE
         with self._lock:
-            with path.open("a", encoding="utf-8") as f:
-                f.write(block)
-                f.flush()
+            if self._separate_files and not is_event:
+                # Пишем в отдельный файл с номером
+                kind_lower = kind.lower()
+                tool_name = step.replace("TOOL:", "").replace("DB:", "") if is_tool else step.lower()
 
-    def _write_streaming_header(self, number: int, step: str) -> None:
-        """Write RESPONSE block header for streaming mode (without closing footer)."""
+                # Заменяем недопустимые символы в именах файлов (для Windows)
+                # : → _ (для DB:xxx и других)
+                tool_name = tool_name.replace(":", "_")
+                step_clean = step.lower().replace(":", "_")
+
+                # Формируем имя файла: 001_llm_request.log, 002_tool_exact_search_response.log
+                if is_tool:
+                    filename = f"{number:03d}_tool_{tool_name}_{kind_lower}.log"
+                else:
+                    filename = f"{number:03d}_llm_{step_clean}_{kind_lower}.log"
+
+                path = self._log_dir / filename
+                with path.open("w", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
+            else:
+                # Пишем в общий файл _rag_llm.log
+                path = self._log_dir / _LOG_FILE
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
+
+    def _write_streaming_header(self, number: int, step: str) -> Path | None:
+        """Write RESPONSE block header for streaming mode (without closing footer).
+
+        Returns:
+            Path to the file being written (for subsequent token appends), or None if using single file.
+        """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         header = f"  #{number:03d}  {ts}  [{step}]  RESPONSE"
         block = f"\n{_SEP_LLM}\n{header}\n{_SEP_LLM}\n"
 
-        path = self._log_dir / _LOG_FILE
         with self._lock:
-            with path.open("a", encoding="utf-8") as f:
-                f.write(block)
-                f.flush()
+            if self._separate_files:
+                # Пишем в отдельный файл
+                # Заменяем недопустимые символы в именах файлов (для Windows)
+                step_clean = step.lower().replace(":", "_")
+                filename = f"{number:03d}_llm_{step_clean}_response.log"
+                path = self._log_dir / filename
+                with path.open("w", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
+                return path
+            else:
+                # Пишем в общий файл
+                path = self._log_dir / _LOG_FILE
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
+                return None
 
-    def _append_streaming_token(self, token: str) -> None:
-        """Append a single token to the currently open streaming response."""
-        path = self._log_dir / _LOG_FILE
+    def _append_streaming_token(self, token: str, file_path: Path | None = None) -> None:
+        """Append a single token to the currently open streaming response.
+
+        Args:
+            token: Token to append
+            file_path: Path to specific file (for separate_files mode) or None for single file
+        """
         with self._lock:
-            with path.open("a", encoding="utf-8") as f:
-                f.write(token)
-                f.flush()
+            if file_path:
+                # Append to specific file
+                with file_path.open("a", encoding="utf-8") as f:
+                    f.write(token)
+                    f.flush()
+            else:
+                # Append to single log file
+                path = self._log_dir / _LOG_FILE
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(token)
+                    f.flush()
 
-    def _write_streaming_footer(self, number: int) -> None:
-        """Write closing footer for streaming RESPONSE block."""
+    def _write_streaming_footer(self, number: int, file_path: Path | None = None) -> None:
+        """Write closing footer for streaming RESPONSE block.
+
+        Args:
+            number: Record number
+            file_path: Path to specific file (for separate_files mode) or None for single file
+        """
         end = f"  end #{number:03d} RESPONSE"
         block = f"\n{_SEP_END}\n{end}\n"
 
-        path = self._log_dir / _LOG_FILE
         with self._lock:
-            with path.open("a", encoding="utf-8") as f:
-                f.write(block)
-                f.flush()
+            if file_path:
+                # Append to specific file
+                with file_path.open("a", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
+            else:
+                # Append to single log file
+                path = self._log_dir / _LOG_FILE
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(block)
+                    f.flush()
 
     def log_stage(self, stage: str, details: str = "") -> None:
         """Write a pipeline stage annotation with ___ border.
@@ -311,23 +427,64 @@ class LlmCallLogger:
 # ---------------------------------------------------------------------------
 
 def _fmt_message_list(messages: list[list[BaseMessage]], model_name: str = "") -> str:
-    """Formats a nested list of LangChain messages into a readable log string."""
+    """Formats a nested list of LangChain messages into a readable log string with clear sections."""
     parts: list[str] = []
+
+    # Model info
     if model_name:
-        parts.append(f"Model: {model_name}\n{'-' * 40}")
+        parts.append(f"Model: {model_name}\n{'-' * 40}\n")
+
+    # Collect all messages first to determine structure
+    all_messages = []
     for msg_list in messages:
         for msg in msg_list:
             role = type(msg).__name__.replace("Message", "").upper()
+
             if isinstance(msg.content, str):
                 content = msg.content
             else:
                 content = json.dumps(msg.content, ensure_ascii=False, default=str)
-            # Append tool_calls if present (AIMessage with pending tool calls)
-            tool_calls = getattr(msg, "tool_calls", None)
-            if tool_calls:
-                tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, indent=2)
-                content = f"{content}\n[tool_calls]\n{tc_json}"
-            parts.append(f"[{role}]\n{content}")
+
+            all_messages.append((role, msg, content))
+
+    # Group messages: SYSTEM separate, rest under [MESSAGES]
+    system_messages = []
+    conversation_messages = []
+
+    for role, msg, content in all_messages:
+        if role == "SYSTEM":
+            system_messages.append((role, msg, content))
+        else:
+            conversation_messages.append((role, msg, content))
+
+    # Format SYSTEM messages
+    for role, msg, content in system_messages:
+        parts.append(f"[SYSTEM]\n{content}")
+
+    # Format conversation messages under [MESSAGES] section if there are any
+    if conversation_messages:
+        if system_messages:  # Add Messages section only if there was a system message before
+            parts.append("\n[MESSAGES]")
+
+        for msg_num, (role, msg, content) in enumerate(conversation_messages, start=1):
+            if role == "HUMAN":
+                parts.append(f"\n[#{msg_num} USER]\n{content}")
+            elif role == "AI":
+                # AI messages may have tool_calls
+                tool_calls = getattr(msg, "tool_calls", None)
+                if tool_calls:
+                    # Компактный JSON для tool_calls (как и для AVAILABLE_TOOLS)
+                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, separators=(',', ':'))
+                    parts.append(f"\n[#{msg_num} ASSISTANT]\n{content}\n\n[TOOL_CALLS]\n{tc_json}")
+                else:
+                    parts.append(f"\n[#{msg_num} ASSISTANT]\n{content}")
+            elif role == "TOOL":
+                tool_name = getattr(msg, "name", "unknown")
+                parts.append(f"\n[#{msg_num} TOOL_RESULT: {tool_name}]\n{content}")
+            else:
+                # Fallback for any other message types
+                parts.append(f"\n[#{msg_num} {role}]\n{content}")
+
     return "\n\n".join(parts)
 
 
@@ -341,8 +498,9 @@ def _fmt_llm_result(response: LLMResult) -> str:
                 content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 tool_calls = getattr(msg, "tool_calls", None)
                 if tool_calls:
-                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, indent=2)
-                    parts.append(f"{content}\n\n[tool_calls]\n{tc_json}")
+                    # Компактный JSON для tool_calls
+                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, separators=(',', ':'))
+                    parts.append(f"{content}\n\n[TOOL_CALLS]\n{tc_json}")
                 else:
                     parts.append(content)
             elif hasattr(gen, "text"):
@@ -451,7 +609,7 @@ class LangChainFileLogger(BaseCallbackHandler):
         if rec:
             if rec._streaming_started:
                 # Streaming was in progress, finalize and append error
-                self._log._append_streaming_token(f"\n\nERROR: {error}")
+                self._log._append_streaming_token(f"\n\nERROR: {error}", rec._streaming_file_path)
                 rec.finalize_response()
             else:
                 rec.set_response(f"ERROR: {error}")
