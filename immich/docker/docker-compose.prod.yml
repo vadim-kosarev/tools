@@ -110,14 +110,15 @@ services:
     restart: always
 
   # set IMMICH_TELEMETRY_INCLUDE=all in .env to enable metrics
-  immich-prometheus:
-    container_name: immich_prometheus
-    ports:
-      - 9090:9090
-    image: prom/prometheus@sha256:502ad90314c7485892ce696cb14a99fceab9fc27af29f4b427f41bd39701a199
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
+#  immich-prometheus:
+#    container_name: immich_prometheus
+#    ports:
+#      - 9090:9090
+#    image: prom/prometheus@sha256:502ad90314c7485892ce696cb14a99fceab9fc27af29f4b427f41bd39701a199
+#    volumes:
+#      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+#      - prometheus-data:/prometheus
+#      - prometheus-data:/prometheus
 
   # first login uses admin/admin
   # add data source for http://immich-prometheus:9090 to get started
@@ -145,12 +146,12 @@ services:
     command: ["-c", "/etc/frp/frpc.ini"]
 
 
-  redis-commander:
-    image: rediscommander/redis-commander
-    environment:
-      - REDIS_HOSTS=local:redis:6379
-    ports:
-      - "8081:8081"
+#  redis-commander:
+#    image: rediscommander/redis-commander
+#    environment:
+#      - REDIS_HOSTS=local:redis:6379
+#    ports:
+#      - "8081:8081"
 
 volumes:
   model-cache:

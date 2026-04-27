@@ -1,0 +1,296 @@
+{
+  "nodes": [
+    {
+      "id": "chatOllama_0",
+      "position": { "x": 480, "y": 50 },
+      "type": "customNode",
+      "data": {
+        "id": "chatOllama_0",
+        "label": "ChatOllama",
+        "version": 5,
+        "name": "chatOllama",
+        "type": "ChatOllama",
+        "baseClasses": ["ChatOllama", "BaseChatModel", "BaseLanguageModel", "Runnable"],
+        "category": "Chat Models",
+        "description": "Chat completion using open-source LLM on Ollama",
+        "inputParams": [
+          { "label": "Base URL", "name": "baseUrl", "type": "string", "default": "http://localhost:11434", "id": "chatOllama_0-input-baseUrl-string", "display": true },
+          { "label": "Model Name", "name": "modelName", "type": "string", "id": "chatOllama_0-input-modelName-string", "display": true },
+          { "label": "Temperature", "name": "temperature", "type": "number", "default": 0.9, "optional": true, "id": "chatOllama_0-input-temperature-number", "display": true },
+          { "label": "Context Window Size", "name": "numCtx", "type": "number", "optional": true, "additionalParams": true, "id": "chatOllama_0-input-numCtx-number", "display": true },
+          { "label": "Keep Alive", "name": "keepAlive", "type": "string", "default": "5m", "optional": true, "additionalParams": true, "id": "chatOllama_0-input-keepAlive-string", "display": true },
+          { "label": "Streaming", "name": "streaming", "type": "boolean", "default": true, "optional": true, "additionalParams": true, "id": "chatOllama_0-input-streaming-boolean", "display": true }
+        ],
+        "inputAnchors": [],
+        "inputs": {
+          "baseUrl": "http://host.docker.internal:11434",
+          "modelName": "qwen2.5:7b",
+          "temperature": "0.1",
+          "numCtx": "8192",
+          "keepAlive": "10m",
+          "streaming": true
+        },
+        "outputAnchors": [
+          {
+            "id": "chatOllama_0-output-chatOllama-ChatOllama|BaseChatModel|BaseLanguageModel|Runnable",
+            "name": "chatOllama",
+            "label": "ChatOllama",
+            "type": "ChatOllama | BaseChatModel | BaseLanguageModel | Runnable"
+          }
+        ],
+        "outputs": {},
+        "selected": false
+      },
+      "width": 300,
+      "height": 430
+    },
+    {
+      "id": "ollamaEmbedding_0",
+      "position": { "x": -380, "y": 900 },
+      "type": "customNode",
+      "data": {
+        "id": "ollamaEmbedding_0",
+        "label": "Ollama Embeddings",
+        "version": 2,
+        "name": "ollamaEmbedding",
+        "type": "OllamaEmbeddings",
+        "baseClasses": ["OllamaEmbeddings", "Embeddings"],
+        "category": "Embeddings",
+        "description": "Generate embeddings using open source model on Ollama",
+        "inputParams": [
+          { "label": "Base URL", "name": "baseUrl", "type": "string", "default": "http://localhost:11434", "id": "ollamaEmbedding_0-input-baseUrl-string", "display": true },
+          { "label": "Model Name", "name": "modelName", "type": "string", "id": "ollamaEmbedding_0-input-modelName-string", "display": true },
+          { "label": "Use MMap", "name": "useMMap", "type": "boolean", "default": true, "optional": true, "additionalParams": true, "id": "ollamaEmbedding_0-input-useMMap-boolean", "display": true }
+        ],
+        "inputAnchors": [],
+        "inputs": {
+          "baseUrl": "http://host.docker.internal:11434",
+          "modelName": "nomic-embed-text:latest",
+          "useMMap": true
+        },
+        "outputAnchors": [
+          {
+            "id": "ollamaEmbedding_0-output-ollamaEmbedding-OllamaEmbeddings|Embeddings",
+            "name": "ollamaEmbedding",
+            "label": "OllamaEmbeddings",
+            "type": "OllamaEmbeddings | Embeddings"
+          }
+        ],
+        "outputs": {},
+        "selected": false
+      },
+      "width": 300,
+      "height": 380
+    },
+    {
+      "id": "chroma_0",
+      "position": { "x": 120, "y": 850 },
+      "type": "customNode",
+      "data": {
+        "id": "chroma_0",
+        "label": "Chroma",
+        "version": 2,
+        "name": "chroma",
+        "type": "Chroma",
+        "baseClasses": ["Chroma", "VectorStoreRetriever", "BaseRetriever"],
+        "category": "Vector Stores",
+        "description": "Similarity search using Chroma vector store",
+        "inputParams": [
+          { "label": "Collection Name", "name": "collectionName", "type": "string", "id": "chroma_0-input-collectionName-string", "display": true },
+          { "label": "Chroma URL", "name": "chromaURL", "type": "string", "optional": true, "id": "chroma_0-input-chromaURL-string", "display": true },
+          { "label": "Top K", "name": "topK", "description": "Number of top results to fetch. Default to 4", "placeholder": "4", "type": "number", "additionalParams": true, "optional": true, "id": "chroma_0-input-topK-number", "display": true }
+        ],
+        "inputAnchors": [
+          { "label": "Embeddings", "name": "embeddings", "type": "Embeddings", "id": "chroma_0-input-embeddings-Embeddings", "display": true }
+        ],
+        "inputs": {
+          "embeddings": "{{ollamaEmbedding_0.data.instance}}",
+          "collectionName": "ec-leasing",
+          "chromaURL": "http://host.docker.internal:3266",
+          "topK": "30"
+        },
+        "outputAnchors": [
+          {
+            "name": "output",
+            "label": "Output",
+            "type": "options",
+            "options": [
+              { "id": "chroma_0-output-retriever-Chroma|VectorStoreRetriever|BaseRetriever", "name": "retriever", "label": "Chroma Retriever", "type": "Chroma | VectorStoreRetriever | BaseRetriever" },
+              { "id": "chroma_0-output-vectorStore-Chroma|VectorStore", "name": "vectorStore", "label": "Chroma Vector Store", "type": "Chroma | VectorStore" }
+            ],
+            "default": "retriever"
+          }
+        ],
+        "outputs": { "output": "retriever" },
+        "selected": false
+      },
+      "width": 300,
+      "height": 600
+    },
+    {
+      "id": "retrieverTool_0",
+      "position": { "x": 120, "y": 400 },
+      "type": "customNode",
+      "data": {
+        "id": "retrieverTool_0",
+        "label": "Retriever Tool",
+        "version": 2,
+        "name": "retrieverTool",
+        "type": "RetrieverTool",
+        "baseClasses": ["RetrieverTool", "DynamicTool", "Tool", "StructuredTool", "Runnable"],
+        "category": "Tools",
+        "description": "Use a retriever as a tool to answer questions",
+        "inputParams": [
+          { "label": "Tool Name", "name": "name", "type": "string", "id": "retrieverTool_0-input-name-string", "display": true },
+          { "label": "Tool Description", "name": "description", "type": "string", "rows": 3, "id": "retrieverTool_0-input-description-string", "display": true },
+          { "label": "Return Source Documents", "name": "returnSourceDocuments", "type": "boolean", "optional": true, "id": "retrieverTool_0-input-returnSourceDocuments-boolean", "display": true }
+        ],
+        "inputAnchors": [
+          { "label": "Retriever", "name": "retriever", "type": "BaseRetriever", "id": "retrieverTool_0-input-retriever-BaseRetriever", "display": true }
+        ],
+        "inputs": {
+          "retriever": "{{chroma_0.data.instance}}",
+          "name": "ec_leasing_search",
+          "description": "Поиск информации по документации EC-Leasing. Используй этот инструмент для поиска технических терминов, команд, определений (RDEFINE, RITEM, RACF и т.д.), процессов, правил и любой информации из документов. При поиске технических идентификаторов пиши их точно как в вопросе.",
+          "returnSourceDocuments": true
+        },
+        "outputAnchors": [
+          {
+            "id": "retrieverTool_0-output-retrieverTool-RetrieverTool|DynamicTool|Tool|StructuredTool|Runnable",
+            "name": "retrieverTool",
+            "label": "RetrieverTool",
+            "type": "RetrieverTool | DynamicTool | Tool | StructuredTool | Runnable"
+          }
+        ],
+        "outputs": {},
+        "selected": false
+      },
+      "width": 300,
+      "height": 440
+    },
+    {
+      "id": "bufferMemory_0",
+      "position": { "x": 860, "y": 500 },
+      "type": "customNode",
+      "data": {
+        "id": "bufferMemory_0",
+        "label": "Buffer Memory",
+        "version": 2,
+        "name": "bufferMemory",
+        "type": "BufferMemory",
+        "baseClasses": ["BufferMemory", "BaseChatMemory", "BaseMemory"],
+        "category": "Memory",
+        "description": "Retrieve chat messages stored in database",
+        "inputParams": [
+          { "label": "Session Id", "name": "sessionId", "type": "string", "description": "If not specified, a random id will be assigned", "default": "", "addSuffix": true, "optional": true, "id": "bufferMemory_0-input-sessionId-string", "display": true },
+          { "label": "Memory Key", "name": "memoryKey", "type": "string", "default": "chat_history", "id": "bufferMemory_0-input-memoryKey-string", "display": true }
+        ],
+        "inputAnchors": [],
+        "inputs": {
+          "sessionId": "",
+          "memoryKey": "chat_history"
+        },
+        "outputAnchors": [
+          {
+            "id": "bufferMemory_0-output-bufferMemory-BufferMemory|BaseChatMemory|BaseMemory",
+            "name": "bufferMemory",
+            "label": "BufferMemory",
+            "type": "BufferMemory | BaseChatMemory | BaseMemory"
+          }
+        ],
+        "outputs": {},
+        "selected": false
+      },
+      "width": 300,
+      "height": 300
+    },
+    {
+      "id": "toolAgent_0",
+      "position": { "x": 1200, "y": 300 },
+      "type": "customNode",
+      "data": {
+        "id": "toolAgent_0",
+        "label": "Tool Agent",
+        "version": 2,
+        "name": "toolAgent",
+        "type": "ToolAgent",
+        "baseClasses": ["ToolAgent"],
+        "category": "Agents",
+        "description": "Agent optimized for tool usage with OpenAI or Function Calling LLMs",
+        "inputParams": [
+          { "label": "System Message", "name": "systemMessage", "type": "string", "rows": 4, "optional": true, "additionalParams": true, "id": "toolAgent_0-input-systemMessage-string", "display": true },
+          { "label": "Max Iterations", "name": "maxIterations", "type": "number", "optional": true, "additionalParams": true, "id": "toolAgent_0-input-maxIterations-number", "display": true }
+        ],
+        "inputAnchors": [
+          { "label": "Tools", "name": "tools", "type": "Tool", "list": true, "id": "toolAgent_0-input-tools-Tool", "display": true },
+          { "label": "Chat Model", "name": "model", "type": "BaseChatModel", "id": "toolAgent_0-input-model-BaseChatModel", "display": true },
+          { "label": "Memory", "name": "memory", "type": "BaseChatMemory", "optional": true, "id": "toolAgent_0-input-memory-BaseChatMemory", "display": true },
+          { "label": "Input Moderation", "name": "inputModeration", "type": "Moderation", "optional": true, "list": true, "id": "toolAgent_0-input-inputModeration-Moderation", "display": true }
+        ],
+        "inputs": {
+          "tools": ["{{retrieverTool_0.data.instance}}"],
+          "model": "{{chatOllama_0.data.instance}}",
+          "memory": "{{bufferMemory_0.data.instance}}",
+          "systemMessage": "Ты — ИИ-ассистент по документации EC-Leasing (z/OS, RACF). Отвечай ТОЛЬКО на русском языке.\n\nСТРАТЕГИЯ ПОИСКА (обязательно выполнять все шаги по порядку):\n\nШаг 1 — Точный поиск термина.\nВызови ec_leasing_search с ТОЧНЫМ термином из вопроса пользователя (например: RDEFINE, RITEM, RACF, RLIST, PERMIT, ADDSD и т.п.).\n\nШаг 2 — Контекстный поиск.\nЕсли шаг 1 не нашёл нужного — вызови ec_leasing_search с расширенным контекстом.\nПримеры: вместо \"RDEFINE\" → \"RDEFINE RACF команда\", вместо \"RITEM\" → \"RITEM класс ресурс\".\n\nШаг 3 — Поиск по частям.\nЕсли шаг 2 не помог — разбей термин: \"RDEFINE\" → попробуй \"DEFINE\", затем \"RACF DEFINE ресурс\".\n\nШаг 4 — Поиск на русском.\nПопробуй русский эквивалент: \"RDEFINE\" → \"определение ресурса RACF\", \"RITEM\" → \"элемент правила RACF\".\n\nПОСЛЕ ПОИСКА:\n- Цитируй найденные фрагменты ДОСЛОВНО.\n- Указывай из какого источника (source) взята информация.\n- Если после ВСЕХ 4 шагов информация не найдена — честно сообщи: \"Термин X не найден в загруженных документах после нескольких попыток поиска.\"\n- НИКОГДА не придумывай информацию, которой нет в документах.\n- Максимум итераций: используй все доступные — не сдавайся после первой неудачи.",
+          "maxIterations": "10",
+          "inputModeration": ""
+        },
+        "outputAnchors": [
+          {
+            "id": "toolAgent_0-output-toolAgent-ToolAgent",
+            "name": "toolAgent",
+            "label": "ToolAgent",
+            "type": "ToolAgent"
+          }
+        ],
+        "outputs": {},
+        "selected": false
+      },
+      "width": 300,
+      "height": 520
+    }
+  ],
+  "edges": [
+    {
+      "source": "ollamaEmbedding_0",
+      "sourceHandle": "ollamaEmbedding_0-output-ollamaEmbedding-OllamaEmbeddings|Embeddings",
+      "target": "chroma_0",
+      "targetHandle": "chroma_0-input-embeddings-Embeddings",
+      "type": "buttonedge",
+      "id": "edge-embed-chroma"
+    },
+    {
+      "source": "chroma_0",
+      "sourceHandle": "chroma_0-output-retriever-Chroma|VectorStoreRetriever|BaseRetriever",
+      "target": "retrieverTool_0",
+      "targetHandle": "retrieverTool_0-input-retriever-BaseRetriever",
+      "type": "buttonedge",
+      "id": "edge-chroma-tool"
+    },
+    {
+      "source": "retrieverTool_0",
+      "sourceHandle": "retrieverTool_0-output-retrieverTool-RetrieverTool|DynamicTool|Tool|StructuredTool|Runnable",
+      "target": "toolAgent_0",
+      "targetHandle": "toolAgent_0-input-tools-Tool",
+      "type": "buttonedge",
+      "id": "edge-tool-agent"
+    },
+    {
+      "source": "chatOllama_0",
+      "sourceHandle": "chatOllama_0-output-chatOllama-ChatOllama|BaseChatModel|BaseLanguageModel|Runnable",
+      "target": "toolAgent_0",
+      "targetHandle": "toolAgent_0-input-model-BaseChatModel",
+      "type": "buttonedge",
+      "id": "edge-llm-agent"
+    },
+    {
+      "source": "bufferMemory_0",
+      "sourceHandle": "bufferMemory_0-output-bufferMemory-BufferMemory|BaseChatMemory|BaseMemory",
+      "target": "toolAgent_0",
+      "targetHandle": "toolAgent_0-input-memory-BaseChatMemory",
+      "type": "buttonedge",
+      "id": "edge-memory-agent"
+    }
+  ]
+}
+

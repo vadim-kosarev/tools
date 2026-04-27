@@ -30,6 +30,7 @@ hs_err_pid*
 
 *.sqlite3
 .idea
+*.iml
 nginx/**/data
 *.webm
 *.mp4
@@ -48,3 +49,4 @@ frigate/database/**
 frigate/backup/**
 frigate/logs/**
 frigate/tmp/**
+py

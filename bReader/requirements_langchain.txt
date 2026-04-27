@@ -1,0 +1,14 @@
+# LangChain + DeepSeek requirements
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-core>=0.1.0
+langchain-ollama
+pydantic>=2.0.0
+
+# LangSmith for tracing and monitoring
+langsmith>=0.1.0
+
+# Environment variables management (REQUIRED)
+python-dotenv>=1.0.0
+
+langsmith[claude-agent-sdk]
