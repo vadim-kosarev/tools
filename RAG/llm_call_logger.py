@@ -5,28 +5,20 @@ pipeline stage transition is recorded to a single file with visually distinct
 separators that make it easy to follow how context evolves.
 
 Visual conventions:
-    ......  (.): LLM REQUEST / RESPONSE blocks   - most prominent
-    ------  (-): TOOL REQUEST / RESPONSE blocks  - medium
-    ______  (_): PIPELINE STAGE markers          - prominent, different char
-    ~~~~~~  (~): end-of-block footer             - common closing line
+    ______  (_): PIPELINE STAGE markers - prominent
 
 File created in the log directory:
     _rag_llm.log   - chronological stream of all events
 
 Each LLM block:
-    ................................................................................
-      #001  2026-04-25 12:00:00  [EXPAND_QUERY]  REQUEST
-    ................................................................................
+    #001  2026-04-25 12:00:00  [EXPAND_QUERY]  REQUEST
     <prompt content>
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-      end #001 REQUEST
+    #001  2026-04-25 12:00:01  [EXPAND_QUERY]  REQUEST end
 
 Each TOOL block:
-    --------------------------------------------------------------------------------
-      #002  2026-04-25 12:00:01  [TOOL:semantic_search]  REQUEST
-    --------------------------------------------------------------------------------
+    #002  2026-04-25 12:00:01  [TOOL:semantic_search]  REQUEST
     {"query": "BDKO description"}
-    ..............  end #002 REQUEST  ..............
+    #002  2026-04-25 12:00:02  [TOOL:semantic_search]  REQUEST end
 
 Each STAGE block:
     ________________________________________________________________________________
@@ -66,10 +58,7 @@ _DEFAULT_LOG_DIR = Path(__file__).parent / "logs"
 _LOG_FILE = "_rag_llm.log"
 
 _W = 80                      # line width for separators
-_SEP_LLM   = "." * _W        # LLM calls  (prominent double-line feel)
-_SEP_TOOL  = "-" * _W        # tool calls (single-line)
 _SEP_STAGE = "_" * _W        # pipeline stage markers
-_SEP_END   = "~" * _W        # block end / footer
 
 
 class _CallRecord:
@@ -129,49 +118,15 @@ class _CallRecord:
             # Get new unique number for response
             response_num = self._logger._next_number()
             self._logger._write(response_num, self.step, "RESPONSE", text)
-        """Append a streaming token to the response buffer.
-
-        Writes token to file incrementally and optionally to console.
-        Must be followed by finalize_response() to close the RESPONSE block.
-
-        Args:
-            token: Text token to append
-            to_console: If True, print token to stdout immediately
-        """
-        if not self._streaming_started:
-            # Write RESPONSE block header on first token
-            self._streaming_file_path = self._logger._write_streaming_header(self.number, self.step)
-            self._streaming_started = True
-
-        self._stream_buffer.append(token)
-        self._logger._append_streaming_token(token, self._streaming_file_path)
-
-        if to_console:
-            print(token, end='', flush=True)
-
-    def finalize_response(self) -> None:
-        """Close the streaming RESPONSE block with footer."""
-        if self._streaming_started:
-            self._logger._write_streaming_footer(self.number, self._streaming_file_path)
-            if self._stream_buffer:  # Print newline after streaming output
-                print()  # newline after streamed response
-
-    def set_response(self, text: str) -> None:
-        """Write RESPONSE block to log immediately (non-streaming mode)."""
-        if self._streaming_started:
-            # Already streamed, just finalize
-            self.finalize_response()
-        else:
-            self._logger._write(self.number, self.step, "RESPONSE", text)
 
 
 class LlmCallLogger:
     """Thread-safe sequential logger for LLM requests, responses, and pipeline stages.
 
     Visual hierarchy in the log file:
-        LLM blocks  - bounded by ... lines (most prominent)
-        TOOL blocks - bounded by --- lines
-        STAGE marks - bounded by ___ lines (pipeline stage transitions)
+        LLM blocks   - header and footer with timestamp
+        TOOL blocks  - header and footer with timestamp
+        STAGE marks  - bounded by ___ lines (pipeline stage transitions)
 
     Each call to set_request / set_response flushes to disk immediately
     so the log file is always up-to-date even during long LLM inference.
@@ -214,8 +169,8 @@ class LlmCallLogger:
         """Append one block to the log file and flush immediately.
 
         Visual style depends on block type:
-          - LLM_CALL / custom -> ... borders, ~~~ footer
-          - TOOL:*            -> --- borders, ... end marker
+          - LLM_CALL / custom -> header and footer with timestamp
+          - TOOL:*            -> header and footer with timestamp
           - EVENT             -> ___ border (reuses log_stage format)
 
         If separate_files=True, writes to individual numbered files:
@@ -231,16 +186,16 @@ class LlmCallLogger:
             indented = "\n".join(f"##    {line}" for line in text.splitlines())
             block = f"\n{_SEP_STAGE}\n{header}\n{indented}\n{_SEP_STAGE}\n"
         elif is_tool:
-            header = f"  #{number:03d}  {ts}  [{step}]  {kind}"
-            end    = f"..............  end #{number:03d} {kind}  .............."
-            block  = f"\n{_SEP_TOOL}\n{header}\n{_SEP_TOOL}\n{text}\n{end}\n"
+            header = f"#{number:03d}  {ts}  [{step}]  {kind}"
+            end    = f"#{number:03d}  {ts}  [{step}]  {kind} end"
+            block  = f"\n{header}\n{text}\n{end}\n"
         else:
-            header = f"  #{number:03d}  {ts}  [{step}]  {kind}"
-            end    = f"  end #{number:03d} {kind}"
+            header = f"#{number:03d}  {ts}  [{step}]  {kind}"
+            end    = f"#{number:03d}  {ts}  [{step}]  {kind} end"
             block  = (
-                f"\n{_SEP_LLM}\n{header}\n{_SEP_LLM}\n"
+                f"\n{header}\n"
                 f"{text}\n"
-                f"{_SEP_END}\n{end}\n"
+                f"{end}\n"
             )
 
         with self._lock:
@@ -278,8 +233,8 @@ class LlmCallLogger:
             Path to the file being written (for subsequent token appends), or None if using single file.
         """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        header = f"  #{number:03d}  {ts}  [{step}]  RESPONSE"
-        block = f"\n{_SEP_LLM}\n{header}\n{_SEP_LLM}\n"
+        header = f"#{number:03d}  {ts}  [{step}]  RESPONSE"
+        block = f"\n{header}\n"
 
         with self._lock:
             if self._separate_files:
@@ -327,8 +282,9 @@ class LlmCallLogger:
             number: Record number
             file_path: Path to specific file (for separate_files mode) or None for single file
         """
-        end = f"  end #{number:03d} RESPONSE"
-        block = f"\n{_SEP_END}\n{end}\n"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        end = f"#{number:03d}  {ts}  RESPONSE end"
+        block = f"\n{end}\n"
 
         with self._lock:
             if file_path:
@@ -442,7 +398,11 @@ def _fmt_message_list(messages: list[list[BaseMessage]], model_name: str = "") -
 
             if isinstance(msg.content, str):
                 content = msg.content
+            elif isinstance(msg.content, (dict, list)):
+                # Dict или list - сериализуем в JSON с отступами для читаемости
+                content = json.dumps(msg.content, ensure_ascii=False, indent=2, default=str)
             else:
+                # Другие типы - преобразуем в JSON
                 content = json.dumps(msg.content, ensure_ascii=False, default=str)
 
             all_messages.append((role, msg, content))

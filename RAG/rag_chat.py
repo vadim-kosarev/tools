@@ -15,6 +15,9 @@ RAG-чат по документации СОИБ КЦОИ.
 Переменные окружения (.env):
     OLLAMA_BASE_URL        — адрес Ollama (по умолчанию http://localhost:11434)
     OLLAMA_MODEL           — LLM-модель (по умолчанию qwen3:8b)
+    OLLAMA_FINAL_MODEL     — более мощная модель для финального ответа
+                             (по умолчанию hf.co/hesamation/Qwen3.6-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M)
+                             # Было: qwen2.5:14b
     OLLAMA_EMBED_MODEL     — модель эмбеддингов (по умолчанию bge-m3)
     KNOWLEDGE_DIR          — папка с .md файлами источников знаний
     CLICKHOUSE_HOST        — хост ClickHouse (по умолчанию localhost)
@@ -69,6 +72,8 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"
+    # ollama_final_model: str = "qwen2.5:14b"  # Более мощная модель для финального ответа
+    ollama_final_model: str = "hf.co/hesamation/Qwen3.6-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M"  # Claude-distilled модель для финального ответа
     ollama_embed_model: str = "bge-m3"
     knowledge_dir: str = r"Z:\ES-Leasing\СОИБ КЦОИ"
     # ClickHouse connection
@@ -350,10 +355,15 @@ PROMPT_TEMPLATE = """\
 Ответ:"""
 
 
-def build_llm() -> ChatOllama:
-    """Создаёт экземпляр LLM с поддержкой streaming для live-вывода."""
+def build_llm(model: Optional[str] = None) -> ChatOllama:
+    """
+    Создаёт экземпляр LLM с поддержкой streaming для live-вывода.
+    
+    Args:
+        model: Имя модели Ollama. Если None, использует settings.ollama_model
+    """
     return ChatOllama(
-        model=settings.ollama_model,
+        model=model or settings.ollama_model,
         base_url=settings.ollama_base_url,
         temperature=0.1,
         num_predict=4096,

@@ -58,6 +58,7 @@ import rag_chat
 from rag_chat import build_vectorstore, settings
 from kb_tools import create_kb_tools, get_tool_registry
 from llm_call_logger import LangChainFileLogger, LlmCallLogger
+import prompts  # Централизованное хранилище промптов
 from logging_config import setup_logging
 from pydantic_utils import pydantic_to_markdown
 
@@ -89,6 +90,9 @@ class AgentState(TypedDict):
     needs_refinement: bool  # Нужны ли уточняющие запросы
     refinement_plan: list[str]  # План уточнения (если нужен)
     final_answer: str  # Итоговый ответ (JSON)
+    # Дополнительные поля для промптов
+    system_prompt: str  # Системный промпт (загружается один раз)
+    MAX_ITERATIONS: int  # Максимальное количество итераций
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +156,16 @@ class FinalAnswerData(BaseModel):
     value: str
 
 
+class RecommendedSection(BaseModel):
+    """Рекомендованный раздел документации для изучения."""
+    source: str = Field(description="Источник (файл)")
+    section: str = Field(description="Название раздела")
+    relevance: Literal["high", "medium"] = Field(
+        description="Уровень релевантности: high - прям точно помогут, medium - вроде полезные по теме"
+    )
+    reason: str = Field(description="Почему этот раздел может быть полезен")
+
+
 class FinalAnswer(BaseModel):
     """Финальный ответ (inner structure)."""
     summary: str = Field(description="Краткий ответ")
@@ -162,6 +176,10 @@ class FinalAnswer(BaseModel):
     )
     sources: list[str] = Field(default_factory=list, description="Источники")
     confidence: float = Field(ge=0.0, le=1.0, description="Уверенность (0-1)")
+    recommendations: list[RecommendedSection] = Field(
+        default_factory=list,
+        description="Рекомендованные разделы документации для дальнейшего изучения"
+    )
 
 
 class AgentFinal(BaseModel):
@@ -180,7 +198,6 @@ _llm_logger: LlmCallLogger | None = None
 
 
 def _get_llm_logger() -> LlmCallLogger:
-    """Returns the process-level LlmCallLogger instance (lazy init)."""
     global _llm_logger
     if _llm_logger is None:
         _llm_logger = LlmCallLogger(
@@ -198,17 +215,6 @@ def _get_llm_logger() -> LlmCallLogger:
 _TOOLS_JSON_CACHE: str | None = None  # Кэш для JSON списка инструментов
 
 def _build_tools_json(compact: bool = False) -> str:
-    """
-    Генерирует JSON со списком доступных инструментов и их параметрами.
-    Использует Pydantic model_json_schema() для получения полной схемы параметров.
-    Результат кэшируется - генерация происходит ОДИН РАЗ при загрузке промпта.
-    
-    Args:
-        compact: Если True, возвращает компактный JSON без отступов (для промптов LLM)
-    
-    Returns:
-        JSON строка с массивом инструментов
-    """
     global _TOOLS_JSON_CACHE
 
     if _TOOLS_JSON_CACHE is not None:
@@ -273,37 +279,33 @@ def _build_tools_json(compact: bool = False) -> str:
 
 def _load_system_prompt() -> str:
     """
-    Загружает system_prompt.md как базовый промпт для агента.
-    Подставляет динамический список инструментов в компактном JSON формате.
-    Оборачивает tools в секцию [AVAILABLE_TOOLS] для явной структурированности.
+    Загружает и форматирует базовый системный промпт.
+    
+    Теперь использует Jinja2 шаблоны из prompts/system_prompt_base.md
+    Placeholder {{ available_tools }} заменяется на JSON со списком инструментов.
     """
-    prompt_path = Path(__file__).parent / "system_prompt.md"
-    if prompt_path.exists():
-        prompt_template = prompt_path.read_text(encoding="utf-8")
-        
-        # Подставляем компактный JSON со списком инструментов
-        tools_json_compact = _build_tools_json(compact=True)
-        # Форматируем JSON для читаемости (добавляем переносы после каждого инструмента)
-        try:
-            tools_list = json.loads(tools_json_compact)
-            # Красиво форматируем: каждый инструмент на новой строке
-            tools_formatted = "[\n  " + ",\n  ".join(
-                json.dumps(t, ensure_ascii=False, separators=(',', ':')) 
-                for t in tools_list
-            ) + "\n]"
-        except Exception:
-            tools_formatted = tools_json_compact
-        
-        # Заменяем placeholder с добавлением секции
-        prompt = prompt_template.replace(
-            "{available_tools}",
-            f"\n[AVAILABLE_TOOLS]\n{tools_formatted}\n"
-        )
-        
-        return prompt
-    else:
-        logger.warning(f"system_prompt.md не найден в {prompt_path}")
-        return "Ты - аналитический AI-агент"
+    # Подготавливаем компактный JSON со списком инструментов
+    tools_json_compact = _build_tools_json(compact=True)
+    # Форматируем JSON для читаемости (добавляем переносы после каждого инструмента)
+    try:
+        tools_list = json.loads(tools_json_compact)
+        # Красиво форматируем: каждый инструмент на новой строке
+        tools_formatted = "[\n  " + ",\n  ".join(
+            json.dumps(t, ensure_ascii=False, separators=(',', ':')) 
+            for t in tools_list
+        ) + "\n]"
+    except Exception:
+        tools_formatted = tools_json_compact
+    
+    # Создаем state для рендеринга шаблона
+    state = {
+        'available_tools': tools_formatted
+    }
+    
+    # Получаем промпт из Jinja2 шаблона (с автоматической подстановкой {{ available_tools }})
+    prompt = prompts.get_system_prompt_base(state)
+    
+    return prompt
 
 
 _SYSTEM_PROMPT = _load_system_prompt()
@@ -314,19 +316,6 @@ _SYSTEM_PROMPT = _load_system_prompt()
 # ---------------------------------------------------------------------------
 
 def _fix_tool_args(tool_name: str, tool_input: dict) -> dict:
-    """
-    Автоматическое исправление некорректных параметров от LLM.
-
-    LLM часто использует интуитивные, но неправильные имена параметров.
-    Эта функция исправляет распространенные ошибки.
-
-    Args:
-        tool_name: Имя инструмента
-        tool_input: Параметры от LLM
-
-    Returns:
-        Исправленные параметры
-    """
     fixed = tool_input.copy()
 
     # find_sections_by_term: LLM часто использует 'term' вместо 'substring'
@@ -373,24 +362,8 @@ def _auto_expand_context(
     tools_map: dict[str, Any],
     llm_logger: LlmCallLogger,
     iteration: int,
-    max_expansions: int = 5  # Максимум расширений на итерацию
+    max_expansions: int = 5
 ) -> list[dict[str, Any]]:
-    """
-    Автоматически расширяет контекст найденных чанков через get_neighbor_chunks.
-    
-    Анализирует результаты инструментов поиска и для каждого найденного чанка
-    с line_start вызывает get_neighbor_chunks для получения контекста.
-    
-    Args:
-        tool_results: Результаты выполненных инструментов
-        tools_map: Маппинг имя_инструмента -> инструмент
-        llm_logger: Логгер для записи операций
-        iteration: Номер текущей итерации
-        max_expansions: Максимум вызовов get_neighbor_chunks
-        
-    Returns:
-        Список дополнительных результатов с расширенным контекстом
-    """
     if not AUTO_EXPAND_CONTEXT:
         return []
     
@@ -484,11 +457,6 @@ def _auto_expand_context(
 # ---------------------------------------------------------------------------
 
 def plan_node(state: AgentState) -> AgentState:
-    """
-    Узел 1: PLANq
-    Анализирует вопрос и формирует план поиска.
-    Возвращает статус 'plan' с перечнем шагов.
-    """
     llm_logger = _get_llm_logger()
     llm_logger.log_stage(
         "PLAN NODE START",
@@ -500,32 +468,14 @@ def plan_node(state: AgentState) -> AgentState:
         llm = rag_chat.build_llm()
         structured_llm = llm.with_structured_output(AgentPlan)
 
+        # Подготовка state для промптов
+        state['system_prompt'] = _SYSTEM_PROMPT
+        state['MAX_ITERATIONS'] = MAX_ITERATIONS
+        
         # Формируем системный промпт
-        system_message = f"""{_SYSTEM_PROMPT}
-
-ТЕКУЩИЙ ЭТАП: plan
-
-
-Сформируй план поиска для ответа на вопрос пользователя.
-Учти, что после первого поиска будет возможность сделать уточняющие запросы.
-
-⚠️ ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА для этапа plan:
-```json
-{{
-  "status": "plan",
-  "step": 1,
-  "thought": "краткое рассуждение о стратегии поиска",
-  "plan": [
-    "шаг 1 - какие инструменты использовать",
-    "шаг 2 - какие данные искать",
-    "шаг 3 - как структурировать результаты"
-  ]
-}}
-```
-
-НЕ ИСПОЛЬЗУЙ поля "action", "observation" или "final_answer" на этом этапе!"""
-
-        user_message = f"Вопрос: {state['user_query']}"
+        # Используем функции из prompts.py для генерации промптов
+        system_message = prompts.get_plan_system_prompt(state)
+        user_message = prompts.get_plan_user_prompt(state)
 
         # Логирование через callback
         invoke_config = {}
@@ -551,19 +501,7 @@ def plan_node(state: AgentState) -> AgentState:
                     logger.warning(f"Ошибка парсинга JSON в plan_node (попытка {attempt + 1}/{max_retries}): {exc}")
                     
                     # Для plan_node используем простой список сообщений (пока не инициализирована история)
-                    user_message += f"""
-
-⚠️ ОШИБКА ПАРСИНГА JSON!
-
-ОБЯЗАТЕЛЬНАЯ структура для этапа plan:
-{{
-  "status": "plan",  ← ОБЯЗАТЕЛЬНО "plan"!
-  "step": 1,
-  "thought": "краткое рассуждение",
-  "plan": ["шаг 1", "шаг 2", "шаг 3"]  ← ОБЯЗАТЕЛЬНО массив строк!
-}}
-
-Попробуй еще раз. Верни ТОЛЬКО JSON, строго в формате выше."""
+                    user_message += prompts.get_plan_retry_prompt(state)
                     continue
                 else:
                     logger.error(f"Не удалось распарсить JSON после {max_retries} попыток: {exc}", exc_info=True)
@@ -600,10 +538,6 @@ def plan_node(state: AgentState) -> AgentState:
 
 
 def action_node(state: AgentState) -> AgentState:
-    """
-    Узел 2: ACTION
-    Выбирает и вызывает инструменты на основе плана или refinement_plan.
-    """
     llm_logger = _get_llm_logger()
     iteration = state.get("iteration", 1)
     llm_logger.log_stage(
@@ -615,58 +549,13 @@ def action_node(state: AgentState) -> AgentState:
         llm = rag_chat.build_llm()
         structured_llm = llm.with_structured_output(AgentAction)
 
-        # Используем refinement_plan если есть, иначе основной plan
-        current_plan = state.get('refinement_plan') or state['plan']
-        plan_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(current_plan))
-
-        # Подготовка контекста из предыдущих результатов
-        previous_results_summary = ""
-        if state.get("all_tool_results"):
-            results_count = len(state["all_tool_results"])
-            previous_results_summary = f"\n\nРЕЗУЛЬТАТЫ ПРЕДЫДУЩИХ ПОИСКОВ ({results_count} инструментов):\n"
-            for i, tr in enumerate(state["all_tool_results"][-10:], 1):
-                tool_name = tr['tool']
-                result_preview = str(tr['result'])[:200]
-                previous_results_summary += f"{i}. {tool_name}: {result_preview}...\n"
-
-        system_message = f"""{_SYSTEM_PROMPT}
-
-ТЕКУЩИЙ ЭТАП: action (итерация {iteration}/{MAX_ITERATIONS})
-
-План {"уточнения" if state.get('refinement_plan') else "поиска"}:
-{plan_text}
-{previous_results_summary}
-
-Выбери 2-4 инструмента для {"уточняющего" if iteration > 1 else "первичного"} поиска.
-{"Используй targeted tools: find_relevant_sections, get_chunks_by_index, exact_search_in_file_section" if iteration > 1 else ""}
-
-⚠️ ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА для этапа action:
-```json
-{{
-  "status": "action",
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение о выборе инструментов",
-  "action": [
-    {{
-      "tool": "имя_инструмента",
-      "input": {{"параметр": "значение"}}
-    }}
-  ]
-}}
-```
-
-Примеры параметров инструментов:
-- semantic_search: {{"query": "текст запроса", "top_k": 10}}
-- exact_search: {{"substring": "точная подстрока", "limit": 30}}
-- exact_search_in_file_section: {{"substring": "термин", "source_file": "file.md", "section": "Section"}}
-- find_relevant_sections: {{"query": "описание темы", "exact_terms": ["term1"], "limit": 10}}
-- get_chunks_by_index: {{"source": "file.md", "section": "Section", "chunk_indices": [0,1,2]}}
-- get_section_content: {{"source_file": "file.md", "section": "Section"}}
-- read_table: {{"section": "Section with table", "limit": 50}}
-
-НЕ ИСПОЛЬЗУЙ поля "observation" или "final_answer" на этом этапе!"""
-
-        user_message = f"Вопрос пользователя: {state['user_query']}"
+        # Подготовка state для промптов
+        state['system_prompt'] = _SYSTEM_PROMPT
+        state['MAX_ITERATIONS'] = MAX_ITERATIONS
+        
+        # Используем функции из prompts.py для генерации промптов
+        system_message = prompts.get_action_system_prompt(state)
+        user_message = prompts.get_action_user_prompt(state)
 
         invoke_config = {}
         if llm_logger._enabled:
@@ -698,24 +587,7 @@ def action_node(state: AgentState) -> AgentState:
                     logger.warning(f"Ошибка парсинга JSON (попытка {attempt + 1}/{max_retries}): {exc}")
                     
                     # Добавляем сообщение об ошибке и требование правильного формата
-                    error_message = f"""⚠️ ОШИБКА ПАРСИНГА JSON!
-
-Твой предыдущий ответ не соответствует требуемому формату.
-
-ОБЯЗАТЕЛЬНАЯ структура для этапа action:
-{{
-  "status": "action",  ← ОБЯЗАТЕЛЬНО "action", НЕ "observation"!
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение",
-  "action": [  ← ОБЯЗАТЕЛЬНО массив с инструментами!
-    {{
-      "tool": "имя_инструмента",
-      "input": {{"параметр": "значение"}}
-    }}
-  ]
-}}
-
-Попробуй еще раз. Верни ТОЛЬКО JSON, строго в формате выше."""
+                    error_message = prompts.get_action_retry_prompt(state)
                     
                     messages.append({"role": "user", "content": error_message})
                     continue
@@ -786,20 +658,26 @@ def action_node(state: AgentState) -> AgentState:
                     logger.info(f"Выполнение {tool_name} с параметрами: {tool_input}")
                     result_raw = tools_map[tool_name].invoke(tool_input)
                     
-                    # Конвертируем result в строку (может быть Pydantic модель)
-                    if hasattr(result_raw, "model_dump_json"):
-                        # Pydantic модель - используем pydantic_to_markdown() для читаемости
-                        result_str = pydantic_to_markdown(result_raw)
+                    # Сохраняем результат как структурированный объект (dict/list), НЕ как строку
+                    if hasattr(result_raw, "model_dump"):
+                        # Pydantic модель → dict (сохраняет структуру!)
+                        result_dict = result_raw.model_dump()
+                    elif isinstance(result_raw, (dict, list)):
+                        # Уже dict/list - оставляем как есть
+                        result_dict = result_raw
                     else:
-                        # Обычная строка или другой объект
-                        result_str = str(result_raw)
-                    
+                        # Примитивный тип (str, int, etc.) - оборачиваем в dict
+                        result_dict = {"value": str(result_raw)}
+
                     tool_results.append({
                         "tool": tool_name,
                         "input": tool_input,
-                        "result": result_str
+                        "result": result_dict  # ← Храним как dict/list, НЕ как строку!
                     })
-                    logger.info(f"{tool_name} завершён, результат: {len(result_str)} символов")
+                    
+                    # Для логов считаем размер JSON
+                    result_size = len(json.dumps(result_dict, ensure_ascii=False))
+                    logger.info(f"{tool_name} завершён, результат: {result_size} байт JSON")
                 except Exception as exc:
                     logger.error(f"Ошибка выполнения {tool_name}: {exc}", exc_info=True)
                     tool_results.append({
@@ -821,12 +699,13 @@ def action_node(state: AgentState) -> AgentState:
         state["all_tool_results"].extend(tool_results)
 
         # Добавляем tool messages в историю
+        # Храним result как dict, НЕ как JSON строку
         for idx, tr in enumerate(tool_results):
             state["messages"].append({
                 "role": "tool",
                 "name": tr["tool"],
                 "tool_call_id": f"call_{iteration}_{idx}",
-                "content": json.dumps(tr, ensure_ascii=False, indent=2)
+                "content": tr  # ← Храним весь tr (dict) как есть, НЕ json.dumps!
             })
 
         llm_logger.log_stage(
@@ -859,10 +738,6 @@ def action_node(state: AgentState) -> AgentState:
 
 
 def observation_node(state: AgentState) -> AgentState:
-    """
-    Узел 3: OBSERVATION
-    Анализирует результаты выполнения инструментов текущей итерации.
-    """
     llm_logger = _get_llm_logger()
     iteration = state.get("iteration", 1)
     llm_logger.log_stage(
@@ -876,42 +751,28 @@ def observation_node(state: AgentState) -> AgentState:
 
         # Последние результаты (текущей итерации)
         current_results = state["all_tool_results"][-len(state["tool_calls"]):]
-        tools_summary = "\n\n".join(
-            f"### {tr['tool']}\n"
-            f"Параметры: {json.dumps(tr['input'], ensure_ascii=False)}\n"
-            f"Результат:\n```\n{str(tr['result'])[:2000]}\n```"
-            for tr in current_results
-        )
+        
+        # Формируем JSON с результатами (БЕЗ ОБРЕЗКИ!)
+        tools_data = []
+        for tr in current_results:
+            tool_entry = {
+                "tool": tr['tool'],
+                "input": tr['input'],
+                "result": tr['result']  # Уже dict, не нужно конвертировать
+            }
+            tools_data.append(tool_entry)
+        
+        # Сериализуем в JSON для LLM
+        tools_json = json.dumps(tools_data, ensure_ascii=False, indent=2)
 
-        system_message = f"""{_SYSTEM_PROMPT}
-
-ТЕКУЩИЙ ЭТАП: observation (итерация {iteration}/{MAX_ITERATIONS})
-
-Проанализируй результаты выполнения инструментов.
-Извлеки ТОЛЬКО информацию из результатов инструментов
-НЕ придумывай, НЕ домысливай.
-
-Опиши:
-1. Что найдено (конкретные факты из результатов)
-2. Что НЕ найдено (какие пробелы остались)
-3. Достаточно ли данных для полного ответа
-
-⚠️ ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА для этапа observation:
-```json
-{{
-  "status": "observation",
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение о результатах",
-  "observation": "подробный анализ: что найдено, что не найдено, достаточно ли данных"
-}}
-```
-
-НЕ ИСПОЛЬЗУЙ поля "action" или "final_answer" на этом этапе!"""
-
-        user_message = f"""Вопрос пользователя: {state['user_query']}
-
-Результаты выполнения инструментов (итерация {iteration}):
-{tools_summary}"""
+        # Подготовка state для промптов
+        state['system_prompt'] = _SYSTEM_PROMPT
+        state['MAX_ITERATIONS'] = MAX_ITERATIONS
+        state['tools_json'] = tools_json
+        
+        # Используем функции из prompts.py для генерации промптов
+        system_message = prompts.get_observation_system_prompt(state)
+        user_message = prompts.get_observation_user_prompt(state)
 
         invoke_config = {}
         if llm_logger._enabled:
@@ -987,10 +848,6 @@ def observation_node(state: AgentState) -> AgentState:
 
 
 def refine_node(state: AgentState) -> AgentState:
-    """
-    Узел 4: REFINE
-    Решает, нужны ли уточняющие запросы или данных достаточно.
-    """
     llm_logger = _get_llm_logger()
     iteration = state.get("iteration", 1)
     llm_logger.log_stage(
@@ -1009,50 +866,13 @@ def refine_node(state: AgentState) -> AgentState:
         llm = rag_chat.build_llm()
         structured_llm = llm.with_structured_output(AgentRefine)
 
-        system_message = f"""{_SYSTEM_PROMPT}
-
-ТЕКУЩИЙ ЭТАП: refine (итерация {iteration}/{MAX_ITERATIONS})
-
-Проанализируй observation и реши:
-1. Достаточно ли данных для полного ответа на вопрос?
-2. Остались ли неотвеченные аспекты вопроса?
-3. Нужны ли уточняющие запросы?
-
-Если нужны уточнения (needs_refinement=True), составь refinement_plan:
-- Какие конкретные данные не хватает
-- Какие инструменты использовать для уточнения
-- Какие параметры передать (source, section, chunk_indices если известны)
-
-Используй targeted tools для уточнений:
-- find_relevant_sections (если нужно найти конкретные разделы)
-- get_chunks_by_index (если известны source, section, indices)
-- exact_search_in_file_section (если известен файл и раздел)
-- get_section_content (если нужен полный текст раздела)
-
-⚠️ ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА для этапа refine:
-```json
-{{
-  "status": "refine",
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение о достаточности данных",
-  "needs_refinement": true,  // или false
-  "refinement_plan": [       // если needs_refinement=true
-    "что именно нужно уточнить",
-    "какие инструменты использовать"
-  ]
-}}
-```
-
-НЕ ИСПОЛЬЗУЙ поля "action", "observation" или "final_answer" на этом этапе!"""
-
-        user_message = f"""Вопрос пользователя: {state['user_query']}
-
-Текущая observation:
-{state['observation']}
-
-Всего найдено результатов: {len(state.get('all_tool_results', []))} инструментов
-
-Решение: нужны ли уточнения?"""
+        # Подготовка state для промптов
+        state['system_prompt'] = _SYSTEM_PROMPT
+        state['MAX_ITERATIONS'] = MAX_ITERATIONS
+        
+        # Используем функции из prompts.py для генерации промптов
+        system_message = prompts.get_refine_system_prompt(state)
+        user_message = prompts.get_refine_user_prompt(state)
 
         invoke_config = {}
         if llm_logger._enabled:
@@ -1082,18 +902,7 @@ def refine_node(state: AgentState) -> AgentState:
                 if attempt < max_retries - 1:
                     logger.warning(f"Ошибка парсинга JSON в refine_node (попытка {attempt + 1}/{max_retries}): {exc}")
                     
-                    error_message = f"""⚠️ ОШИБКА ПАРСИНГА JSON!
-
-ОБЯЗАТЕЛЬНАЯ структура для этапа refine:
-{{
-  "status": "refine",  ← ОБЯЗАТЕЛЬНО "refine"!
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение",
-  "needs_refinement": true,  ← ОБЯЗАТЕЛЬНО boolean!
-  "refinement_plan": ["шаг 1", "шаг 2"]  ← Массив строк (может быть пустым если needs_refinement=false)
-}}
-
-Попробуй еще раз. Верни ТОЛЬКО JSON, строго в формате выше."""
+                    error_message = prompts.get_refine_retry_prompt(state)
                     
                     messages.append({"role": "user", "content": error_message})
                     continue
@@ -1137,76 +946,43 @@ def refine_node(state: AgentState) -> AgentState:
 
 
 def final_node(state: AgentState) -> AgentState:
-    """
-    Узел 5: FINAL
-    Формирует финальный ответ на основе всех собранных данных.
-    """
     llm_logger = _get_llm_logger()
     total_tools = len(state.get("all_tool_results", []))
     llm_logger.log_stage(
         "FINAL NODE START",
-        f"Всего выполнено инструментов: {total_tools}, итераций: {state.get('iteration', 1)}"
+        f"Всего выполнено инструментов: {total_tools}, итераций: {state.get('iteration', 1)}\n"
+        f"Модель: {settings.ollama_final_model} (более мощная для финального ответа)"
     )
 
     try:
-        llm = rag_chat.build_llm()
+        # Используем более мощную модель для финального ответа
+        llm = rag_chat.build_llm(model=settings.ollama_final_model)
         structured_llm = llm.with_structured_output(AgentFinal)
+        
+        logger.info(f"Final node использует модель: {settings.ollama_final_model}")
 
-        # Подготовка полного контекста
-        all_results_summary = "\n\n".join(
-            f"### {tr['tool']}\n{str(tr['result'])[:1500]}"
-            for tr in state.get("all_tool_results", [])
-        )
+        # Подготовка полного контекста - все результаты как JSON (БЕЗ ОБРЕЗКИ!)
+        all_results_data = []
+        for tr in state.get("all_tool_results", []):
+            result_entry = {
+                "tool": tr['tool'],
+                "input": tr['input'],
+                "result": tr['result']  # Уже dict, не нужно конвертировать
+            }
+            all_results_data.append(result_entry)
+        
+        # Сериализуем в JSON для LLM
+        all_results_json = json.dumps(all_results_data, ensure_ascii=False, indent=2)
 
-        system_message = f"""{_SYSTEM_PROMPT}
-
-ТЕКУЩИЙ ЭТАП: final
-
-Сформируй итоговый ответ на вопрос пользователя.
-
-СТРОГИЕ ПРАВИЛА:
-- Используй ТОЛЬКО информацию из результатов инструментов
-- НЕ придумывай, НЕ домысливай
-- Если данных нет - честно признай это
-- Указывай источники для каждого факта
-- Структурируй ответ (summary, details, data, sources)
-
-Всего выполнено {total_tools} инструментов за {state.get('iteration', 1)} итераций.
-
-⚠️ ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА для этапа final:
-```json
-{{
-  "status": "final",
-  "step": {state.get("step", 1) + 1},
-  "thought": "краткое рассуждение о полноте ответа",
-  "final_answer": {{
-    "summary": "краткий ответ на вопрос",
-    "details": "подробное объяснение с фактами из документации",
-    "data": [
-      {{
-        "entity": "название сущности",
-        "attribute": "атрибут",
-        "value": "значение"
-      }}
-    ],
-    "sources": ["источник 1", "источник 2"],
-    "confidence": 0.85
-  }}
-}}
-```
-
-НЕ ИСПОЛЬЗУЙ поля "action", "observation" или "plan" на этом этапе!"""
-
-        user_message = f"""Вопрос пользователя: {state['user_query']}
-
-Первоначальный план:
-{chr(10).join(f"{i+1}. {s}" for i, s in enumerate(state['plan']))}
-
-Финальная observation:
-{state['observation']}
-
-ВСЕ результаты инструментов ({total_tools}):
-{all_results_summary}"""
+        # Подготовка state для промптов
+        state['system_prompt'] = _SYSTEM_PROMPT
+        state['MAX_ITERATIONS'] = MAX_ITERATIONS
+        state['total_tools'] = total_tools
+        state['all_results_json'] = all_results_json
+        
+        # Используем функции из prompts.py для генерации промптов
+        system_message = prompts.get_final_system_prompt(state)
+        user_message = prompts.get_final_user_prompt(state)
 
         invoke_config = {}
         if llm_logger._enabled:
@@ -1300,13 +1076,6 @@ def final_node(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def should_refine(state: AgentState) -> str:
-    """
-    Решает, нужно ли продолжить уточнение или перейти к финалу.
-
-    Returns:
-        "action" если needs_refinement=True
-        "final" если needs_refinement=False или достигнут лимит
-    """
     if state.get("needs_refinement", False) and state.get("iteration", 1) < MAX_ITERATIONS:
         logger.info(f"Продолжаем уточнение: iteration {state['iteration']}")
         return "action"
@@ -1320,16 +1089,6 @@ def should_refine(state: AgentState) -> str:
 # ---------------------------------------------------------------------------
 
 def build_graph() -> Any:
-    """
-    Собирает LangGraph граф для итеративного агента.
-
-    Pipeline:
-        START -> plan -> action -> observation -> refine
-                           ↑                       ↓
-                           +------ [да] ----------+
-                                    ↓ [нет]
-                                  final -> END
-    """
     workflow = StateGraph(AgentState)
 
     # Добавляем узлы
@@ -1365,16 +1124,6 @@ def build_graph() -> Any:
 # ---------------------------------------------------------------------------
 
 def run_query(question: str, verbose: bool = False) -> dict:
-    """
-    Выполняет один запрос через итеративный агент.
-
-    Args:
-        question: Вопрос пользователя
-        verbose: Режим подробного вывода
-
-    Returns:
-        Финальное состояние агента
-    """
     llm_logger = _get_llm_logger()
     llm_logger.log_stage(
         "QUERY START",
@@ -1427,7 +1176,6 @@ def run_query(question: str, verbose: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 
 def print_result(question: str, state: dict, verbose: bool = False) -> None:
-    """Выводит результаты работы агента."""
     SEP = "=" * 80
 
     print(f"\n{SEP}")
@@ -1479,6 +1227,25 @@ def print_result(question: str, state: dict, verbose: bool = False) -> None:
             for src in final_ans['sources']:
                 print(f"  - {src}")
 
+        if final_ans.get('recommendations'):
+            print(f"\n💡 Рекомендованные разделы для изучения:")
+            
+            # Разделы с высокой релевантностью
+            high_relevance = [r for r in final_ans['recommendations'] if r.get('relevance') == 'high']
+            if high_relevance:
+                print(f"\n  🔥 Прям точно помогут:")
+                for rec in high_relevance:
+                    print(f"    📄 [{rec.get('source')}] — {rec.get('section')}")
+                    print(f"       ℹ️  {rec.get('reason')}")
+            
+            # Разделы со средней релевантностью
+            medium_relevance = [r for r in final_ans['recommendations'] if r.get('relevance') == 'medium']
+            if medium_relevance:
+                print(f"\n  📌 Вроде полезные по теме:")
+                for rec in medium_relevance:
+                    print(f"    📄 [{rec.get('source')}] — {rec.get('section')}")
+                    print(f"       ℹ️  {rec.get('reason')}")
+
         print(f"\n🎯 Confidence: {final_ans.get('confidence', 0):.2%}")
         print(f"🔄 Iterations: {state.get('iteration', 1)}")
 
@@ -1494,7 +1261,6 @@ def print_result(question: str, state: dict, verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 def run_interactive(verbose: bool = False) -> None:
-    """Запускает интерактивный режим для многократных вопросов."""
     SEP = "=" * 80
     print(f"\n{SEP}")
     print(f"Iterative RAG-агент (следует system_prompt.md, max {MAX_ITERATIONS} iterations)")
@@ -1549,16 +1315,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def clear_logs_directory() -> None:
-    """
-    Очищает директорию logs от файлов с нумерацией перед запуском агента.
-    
-    Удаляет:
-      - [0-9][0-9][0-9]_*.log - отдельные файлы запросов/ответов
-      - _rag_llm.log - единый файл логов (старый формат)
-    
-    Сохраняет:
-      - Другие файлы (README, test/, и т.д.)
-    """
     logs_dir = Path(__file__).parent / "logs"
     if not logs_dir.exists():
         return

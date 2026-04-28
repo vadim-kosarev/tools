@@ -208,16 +208,12 @@ def _format_item(item: Any, indent: int = 0) -> str:
         section = metadata.get('section', '?')
         line_start = metadata.get('line_start', '?')
         
-        # Укороченный вывод для content
+        # ВАЖНО: Выводим content ПОЛНОСТЬЮ, БЕЗ ОБРЕЗКИ!
         content = item.get('content', '')
-        if isinstance(content, str) and len(content) > 60:
-            content_preview = content[:60] + '...'
-        else:
-            content_preview = content
-        
+
         # Формируем компактный вывод с явными source и section
-        return f"ChunkResult(source={source}, section={section}, line={line_start}, content={repr(content_preview)})"
-    
+        return f"ChunkResult(source={source}, section={section}, line={line_start}, content={repr(content)})"
+
     # Pydantic BaseModel
     elif isinstance(item, BaseModel):
         # Для Pydantic моделей показываем все поля в одну строку
