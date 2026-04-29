@@ -14,6 +14,7 @@ LangChain Tools для доступа к базе знаний в ClickHouse.
   find_sections_by_term      — поиск разделов содержащих термин (возвращает список source+section)
   find_relevant_sections     — двухэтапный поиск: по названию раздела + по терминам в содержимом
   regex_search               — regex-поиск по исходным .md файлам с контекстом
+  find_abbreviation_expansion — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
   read_table                 — чтение строк таблицы по разделу
   get_section_content        — полный текст раздела из исходного .md файла
   list_sections              — дерево разделов базы знаний (по файлу или всей KB)
@@ -129,6 +130,20 @@ class RegexSearchResult(BaseModel):
     total_matches: int = Field(description="Всего совпадений")
 
 
+class AbbreviationExpansionItem(BaseModel):
+    """Одна найденная расшифровка аббревиатуры с чанком"""
+    expansion: str = Field(description="Текст расшифровки")
+    chunk: ChunkResult = Field(description="Чанк в котором найдена расшифровка")
+
+
+class AbbreviationExpansionResult(BaseModel):
+    """Результат поиска расшифровки аббревиатуры"""
+    abbreviation: str = Field(description="Исходная аббревиатура")
+    expansions: list[AbbreviationExpansionItem] = Field(description="Найденные расшифровки с чанками")
+    total_found: int = Field(description="Всего найдено расшифровок")
+    pattern_used: str = Field(description="Использованный regex паттерн")
+
+
 class TableRow(BaseModel):
     """Строка таблицы"""
     source: str = Field(description="Имя файла")
@@ -202,6 +217,7 @@ ALL_TOOLS = [
     "find_sections_by_term",
     "find_relevant_sections",
     "regex_search",
+    "find_abbreviation_expansion",
     "read_table",
     "get_section_content",
     "list_sections",
@@ -221,6 +237,7 @@ AGENT_SELECTABLE_TOOLS = [
     "find_sections_by_term",
     "find_relevant_sections",
     "regex_search",
+    "find_abbreviation_expansion",
     "read_table",
     "get_section_content",
     "list_sections",
@@ -234,6 +251,7 @@ AGENT_SELECTABLE_TOOLS = [
 def _doc_to_chunk_metadata(meta: dict) -> ChunkMetadata:
     """Конвертер метаданных Document → ChunkMetadata"""
     return ChunkMetadata(
+        chunk_id=meta['chunk_id'],
         source=meta['source'],
         section=meta['section'],
         chunk_type=meta['chunk_type'],
@@ -590,6 +608,12 @@ def create_kb_tools(
             description=r"Regex pattern to search in source .md files. "
                         r"Examples: r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' for IPs, "
                         r"r'порт\s*:?\s*\d+' for ports, r'vlan\s*:?\s*\d+' for VLANs."
+        )
+        max_results: int = Field(default=regex_max_results, description="Max matches to return", ge=1, le=200)
+
+    class FindAbbreviationExpansionInput(BaseModel):
+        abbreviation: str = Field(
+            description="Abbreviation in CAPITAL LETTERS to find expansion for. Supports letters and digits (e.g. 'КЦОИ', 'RAM', 'API', 'AK47', 'T34')"
         )
         max_results: int = Field(default=regex_max_results, description="Max matches to return", ge=1, le=200)
 
@@ -1207,6 +1231,199 @@ def create_kb_tools(
 
         return result
 
+    def _build_abbreviation_pattern(abbreviation: str) -> str:
+        r"""
+        Создает regex паттерн для поиска расшифровки аббревиатуры.
+
+        Логика:
+        - Каждая буква аббревиатуры -> начало слова + буквы того же алфавита
+        - Цифры -> точное совпадение (как есть)
+        - Между элементами могут быть пробелы и знаки препинания
+        - Поддержка русских (кириллица) и английских букв + цифры
+
+        Примеры:
+            КЦОИ -> К[а-яё]*\s+Ц[а-яё]*\s+О[а-яё]*\s+И[а-яё]*
+            RAM  -> R[a-z]*\s+A[a-z]*\s+M[a-z]*
+            API  -> A[a-z]*\s+P[a-z]*\s+I[a-z]*
+            AK47 -> A[a-z]*\s+K[a-z]*\s+47
+            T34  -> T[a-z]*\s+34
+        """
+        if not abbreviation:
+            raise ValueError("Abbreviation cannot be empty")
+
+        # Строим паттерн: обрабатываем каждый символ
+        parts = []
+        i = 0
+        while i < len(abbreviation):
+            char = abbreviation[i]
+            
+            # Проверяем, это цифра?
+            if char.isdigit():
+                # Собираем все подряд идущие цифры
+                digit_sequence = char
+                i += 1
+                while i < len(abbreviation) and abbreviation[i].isdigit():
+                    digit_sequence += abbreviation[i]
+                    i += 1
+                # Цифры идут как есть - точное совпадение
+                parts.append(digit_sequence)
+            elif char.isalpha():
+                # Определяем алфавит для этой буквы
+                upper_char = char.upper()
+                if 'А' <= upper_char <= 'Я' or upper_char == 'Ё':
+                    # Кириллица
+                    letter_class = r'[а-яё]'
+                elif 'A' <= upper_char <= 'Z':
+                    # Латиница
+                    letter_class = r'[a-z]'
+                else:
+                    raise ValueError(f"Unsupported character in abbreviation: {char}")
+                
+                # Буква + буквы того же алфавита
+                parts.append(f"{upper_char}{letter_class}*")
+                i += 1
+            else:
+                # Неподдерживаемый символ
+                raise ValueError(f"Unsupported character in abbreviation: {char}")
+
+        # Соединяем через \s+ (один или более пробелов)
+        pattern = r'\s+'.join(parts)
+
+        logger.debug(f"Generated pattern for '{abbreviation}': {pattern}")
+        return pattern
+
+    @tool(args_schema=FindAbbreviationExpansionInput)
+    def find_abbreviation_expansion(
+        abbreviation: str,
+        max_results: int = regex_max_results
+    ) -> AbbreviationExpansionResult:
+        """
+        Find expansions (расшифровки) of abbreviations in knowledge base.
+
+        Searches for sequences of words where each word starts with the corresponding letter
+        from the abbreviation. Works for both Cyrillic and Latin abbreviations.
+        Supports digits in abbreviations (e.g., AK47, T34).
+
+        Best for: finding full names of acronyms (RAM, API, AK47, etc.)
+
+        Examples:
+            КЦОИ -> finds расшифровки с чанками
+            RAM  -> finds ["Random Access Memory"] with chunks
+            API  -> finds ["Application Programming Interface"] with chunks
+            AK47 -> finds ["Автомат Калашникова 47"] with chunks
+            T34  -> finds ["Танк 34"] with chunks
+
+        The tool automatically generates a regex pattern:
+            - Letters -> words starting with those letters (case-insensitive)
+            - Digits -> exact match (as is)
+
+        Returns:
+            AbbreviationExpansionResult with abbreviation, list of expansions with chunks, total count, and pattern
+        """
+        logger.debug(f"Tool find_abbreviation_expansion: abbreviation='{abbreviation}'")
+
+        try:
+            # Генерируем regex паттерн
+            pattern = _build_abbreviation_pattern(abbreviation)
+        except ValueError as e:
+            logger.error(f"Invalid abbreviation '{abbreviation}': {e}")
+            # Возвращаем пустой результат
+            return AbbreviationExpansionResult(
+                abbreviation=abbreviation,
+                expansions=[],
+                total_found=0,
+                pattern_used=""
+            )
+
+        rec = _db_request(
+            "DB:find_abbreviation_expansion",
+            f"abbreviation={abbreviation!r}\ngenerated_pattern={pattern!r}\nmax_results={max_results}"
+        )
+
+        # Используем существующий regex_search из rag_chat
+        search_result = _kb_regex_search(pattern, knowledge_dir)
+
+        # Словарь: expansion -> список (file, line_number)
+        expansions_map = {}
+        for match in search_result.matches[:max_results * 3]:  # Берем больше для дедупликации
+            # Очищаем текст от лишних пробелов и нормализуем
+            expansion = " ".join(match.match.split())
+            if expansion:
+                if expansion not in expansions_map:
+                    expansions_map[expansion] = []
+                expansions_map[expansion].append((match.file, match.line_number))
+
+        # Для каждой уникальной расшифровки находим чанк в vectorstore
+        expansion_items = []
+        for expansion, locations in sorted(expansions_map.items())[:max_results]:
+            # Берем первое местоположение
+            source_file, line_num = locations[0]
+            
+            # Ищем чанк в vectorstore по точному совпадению расшифровки
+            # Используем exact_search с фильтром по файлу
+            docs = vectorstore.clone().exact_search(
+                expansion,
+                limit=5,  # Берем несколько, выберем наиболее подходящий
+                chunk_type="",  # Только prose chunks
+                source=source_file,
+                section=None
+            )
+            
+            # Ищем чанк который содержит нужную строку или ближайший по line_start
+            best_doc = None
+            min_distance = float('inf')
+            
+            for doc in docs:
+                # Проверяем, что чанк содержит искомую расшифровку
+                if expansion.lower() in doc.page_content.lower():
+                    line_start = doc.metadata.get('line_start', 0)
+                    distance = abs(line_start - line_num)
+                    if distance < min_distance:
+                        min_distance = distance
+                        best_doc = doc
+            
+            # Если не нашли точного совпадения, берем первый
+            if best_doc is None and docs:
+                best_doc = docs[0]
+            
+            if best_doc:
+                # Конвертируем в ChunkResult
+                chunk = ChunkResult(
+                    content=best_doc.page_content,
+                    metadata=ChunkMetadata(
+                        chunk_id=best_doc.metadata.get('chunk_id', ''),
+                        source=best_doc.metadata.get('source', ''),
+                        section=best_doc.metadata.get('section', ''),
+                        chunk_type=best_doc.metadata.get('chunk_type', ''),
+                        line_start=best_doc.metadata.get('line_start', 0),
+                        line_end=best_doc.metadata.get('line_end', 0),
+                        chunk_index=best_doc.metadata.get('chunk_index', 0),
+                        table_headers=best_doc.metadata.get('table_headers')
+                    ),
+                    score=None
+                )
+                
+                expansion_items.append(AbbreviationExpansionItem(
+                    expansion=expansion,
+                    chunk=chunk
+                ))
+
+        result = AbbreviationExpansionResult(
+            abbreviation=abbreviation,
+            expansions=expansion_items,
+            total_found=len(expansion_items),
+            pattern_used=pattern
+        )
+
+        # Логирование
+        if rec:
+            rec.set_response(result.model_dump_json(indent=2))
+        logger.info(
+            f"find_abbreviation_expansion '{abbreviation}': {result.total_found} уникальных расшифровок с чанками"
+        )
+
+        return result
+
     @tool(args_schema=ReadTableInput)
     def read_table(section: str, source_file: Optional[str] = None, limit: int = 50) -> TableResult:
         """
@@ -1677,6 +1894,7 @@ def create_kb_tools(
         find_sections_by_term,
         find_relevant_sections,
         regex_search,
+        find_abbreviation_expansion,
         read_table,
         get_section_content,
         list_sections,
@@ -1703,6 +1921,7 @@ def get_tool_registry() -> dict[str, str]:
         "find_sections_by_term": "Поиск разделов содержащих термин (возвращает список source+section)",
         "find_relevant_sections": "Двухэтапный поиск: по названию раздела + по терминам в содержимом",
         "regex_search": "Поиск по regex-паттернам (IP, порты, VLAN)",
+        "find_abbreviation_expansion": "Поиск расшифровки аббревиатур (КЦОИ, RAM, API)",
         "read_table": "Чтение строк таблицы по названию раздела",
         "get_section_content": "Полный текст раздела из .md файла",
         "list_sections": "Список разделов документации",
@@ -1713,6 +1932,258 @@ def get_tool_registry() -> dict[str, str]:
     }
 
 
+# ---------------------------------------------------------------------------
+# CLI Interface
+# ---------------------------------------------------------------------------
+
+def _cli_list_tools(tools: list[BaseTool]) -> None:
+    """Выводит краткий список инструментов компактно"""
+    
+    # Собираем данные
+    rows = []
+    for tool in tools:
+        # Получаем имена параметров
+        param_names = []
+        if hasattr(tool, 'args_schema') and tool.args_schema:
+            schema = tool.args_schema
+            if hasattr(schema, 'model_fields'):
+                for field_name, field_info in schema.model_fields.items():
+                    required = field_info.is_required()
+                    if required:
+                        param_names.append(field_name)
+                    else:
+                        param_names.append(f"[{field_name}]")
+        
+        params_str = ', '.join(param_names) if param_names else '-'
+        rows.append((tool.name, params_str))
+    
+    if not rows:
+        print("Нет доступных инструментов")
+        return
+    
+    # Вычисляем максимальную ширину названия для выравнивания
+    max_name_len = max(len(row[0]) for row in rows)
+    
+    # Выводим список
+    for name, params in rows:
+        print(f"{name:<{max_name_len}}  {params}")
+    
+    print(f"\nВсего: {len(rows)} | Детали: python kb_tools.py help <инструмент>")
+
+
+def _cli_help_tool(tools: list[BaseTool], tool_name: str) -> None:
+    """Выводит детальную справку по инструменту"""
+    # Находим инструмент
+    tool = next((t for t in tools if t.name == tool_name), None)
+    if not tool:
+        print(f"Ошибка: инструмент '{tool_name}' не найден", file=__import__('sys').stderr)
+        print(f"Доступные инструменты: {', '.join(t.name for t in tools)}", file=__import__('sys').stderr)
+        __import__('sys').exit(1)
+    
+    print("=" * 80)
+    print(f"Инструмент: {tool.name}")
+    print("=" * 80)
+    print()
+    print("Описание:")
+    print(f"  {tool.description}")
+    print()
+    
+    # Детальная информация о параметрах
+    if hasattr(tool, 'args_schema') and tool.args_schema:
+        schema = tool.args_schema
+        if hasattr(schema, 'model_fields'):
+            print("Параметры:")
+            print()
+            for field_name, field_info in schema.model_fields.items():
+                field_type = field_info.annotation
+                # Упрощенное отображение типа
+                type_str = str(field_type).replace("typing.", "").replace("<class '", "").replace("'>", "")
+                required = field_info.is_required()
+                default = field_info.default if not required else None
+                
+                # Статус обязательности
+                if required:
+                    req_str = "✓ обязательный"
+                else:
+                    req_str = f"○ опциональный (default={default})"
+                
+                print(f"  {field_name}={type_str}")
+                print(f"    {req_str}")
+                if field_info.description:
+                    # Форматируем описание с отступом
+                    desc_lines = field_info.description.split('\n')
+                    for line in desc_lines:
+                        print(f"    {line}")
+                print()
+    
+    print("=" * 80)
+    print("Пример использования:")
+    print(f"  python kb_tools.py run {tool_name} param=value ...")
+    print("=" * 80)
+
+
+def _cli_run_tool(tools: list[BaseTool], tool_name: str, args: dict) -> None:
+    """Запускает инструмент с заданными аргументами"""
+    # Находим инструмент
+    tool = next((t for t in tools if t.name == tool_name), None)
+    if not tool:
+        print(f"Ошибка: инструмент '{tool_name}' не найден", file=__import__('sys').stderr)
+        print(f"Доступные инструменты: {', '.join(t.name for t in tools)}", file=__import__('sys').stderr)
+        __import__('sys').exit(1)
+    
+    try:
+        # Вызываем инструмент
+        result = tool.invoke(args)
+        
+        # Выводим результат в JSON
+        if hasattr(result, 'model_dump'):
+            # Pydantic модель
+            print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
+        elif hasattr(result, 'dict'):
+            # Старый Pydantic
+            print(json.dumps(result.dict(), ensure_ascii=False, indent=2))
+        else:
+            # Обычный объект
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    
+    except Exception as e:
+        print(f"Ошибка выполнения: {e}", file=__import__('sys').stderr)
+        import traceback
+        traceback.print_exc()
+        __import__('sys').exit(1)
+
+
+def main():
+    """CLI интерфейс для kb_tools"""
+    import argparse
+    import sys
+    from pathlib import Path
+    
+    parser = argparse.ArgumentParser(
+        description="KB Tools CLI - инструменты для работы с базой знаний",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Команды:
+
+  list                        Список всех инструментов с именами параметров
+  run <tool> param=value...   Запустить инструмент с параметрами
+  help [tool]                 Общий help или детальная справка по инструменту
+
+Примеры:
+
+  # Показать список инструментов
+  python kb_tools.py list
+
+  # Детальная справка по инструменту
+  python kb_tools.py help exact_search
+
+  # Вызвать инструмент
+  python kb_tools.py run exact_search substring="КЦОИ" limit=10
+  python kb_tools.py run semantic_search query="что такое RAG" top_k=5
+  python kb_tools.py run find_abbreviation_expansion abbreviation="AK47"
+
+Формат параметров: param=value (числа автоматически конвертируются)
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Команда')
+    
+    # Команда list
+    list_parser = subparsers.add_parser('list', help='Список инструментов с именами параметров')
+    
+    # Команда help
+    help_parser = subparsers.add_parser('help', help='Справка по инструменту')
+    help_parser.add_argument('tool_name', nargs='?', help='Название инструмента (если не указан - общий help)')
+
+    # Команда run
+    run_parser = subparsers.add_parser('run', help='Запустить инструмент')
+    run_parser.add_argument('tool_name', help='Название инструмента')
+    run_parser.add_argument('params', nargs='*', help='Параметры в формате param=value')
+    
+    # Парсим аргументы
+    if len(sys.argv) == 1:
+        # Без аргументов - показываем help
+        parser.print_help()
+        sys.exit(0)
+    
+    args = parser.parse_args()
+    
+    # Если команда help без tool_name - показываем общий help
+    if args.command == 'help' and not hasattr(args, 'tool_name') or (hasattr(args, 'tool_name') and args.tool_name is None):
+        parser.print_help()
+        sys.exit(0)
+    
+    # Инициализация vectorstore и knowledge_dir (только если нужно для команды)
+    tools = None
+    if args.command in ['list', 'run'] or (args.command == 'help' and hasattr(args, 'tool_name') and args.tool_name):
+        try:
+            from clickhouse_store import ClickHouseVectorStore
+            from rag_chat import build_vectorstore, settings
+            
+            print("Инициализация vectorstore...", file=sys.stderr)
+            vectorstore = build_vectorstore()
+            knowledge_dir = Path(settings.knowledge_dir)
+            
+            # Создаем инструменты
+            tools = create_kb_tools(vectorstore, knowledge_dir)
+            
+        except Exception as e:
+            print(f"Ошибка инициализации: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+    # Выполняем команду
+    if args.command == 'list':
+        if tools is None:
+            print("Ошибка: tools не инициализированы", file=sys.stderr)
+            sys.exit(1)
+        _cli_list_tools(tools)
+    
+    elif args.command == 'help':
+        if args.tool_name:
+            if tools is None:
+                print("Ошибка: tools не инициализированы", file=sys.stderr)
+                sys.exit(1)
+            _cli_help_tool(tools, args.tool_name)
+        else:
+            parser.print_help()
+    
+    elif args.command == 'run':
+        if tools is None:
+            print("Ошибка: tools не инициализированы", file=sys.stderr)
+            sys.exit(1)
+        # Парсим параметры в формате param=value
+        tool_args = {}
+        for param in args.params:
+            if '=' in param:
+                key, value = param.split('=', 1)
+                # Пробуем преобразовать в число
+                try:
+                    value = int(value)
+                except ValueError:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        # Пробуем распарсить как JSON для списков/объектов
+                        if value.startswith('[') or value.startswith('{'):
+                            try:
+                                value = json.loads(value)
+                            except:
+                                pass  # Оставляем строкой
+                tool_args[key] = value
+            else:
+                print(f"Предупреждение: пропущен параметр '{param}' (ожидается формат param=value)", file=sys.stderr)
+        
+        _cli_run_tool(tools, args.tool_name, tool_args)
+    
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 
 
 

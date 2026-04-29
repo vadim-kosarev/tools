@@ -9,8 +9,9 @@
    - Какая информация нужна?
    - Какие термины/понятия ключевые?
 
-2. **Выбери стратегию поиска:**
+2. **Выбери стратегию  поиска:**
    - "Что такое X?" →  exact_search + semantic_search
+   - "что такое XXYY?" (аббревиатура) → find_abbreviation_expansion (возвращает расшифровки с чанками) + exact_search
    - "Дай список X" → find_sections_by_term + get_section_content
    - "Какое X на Y?" → multi_term_exact_search (основные термины + синонимы)
    - Регулярные данные (IP, порты) → regex_search

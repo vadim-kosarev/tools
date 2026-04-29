@@ -7,8 +7,8 @@ LangGraph RAG-агент — рефакторинг v3.
 Узлы:
   planner       - строит текстовый план поиска (LLM, Russian)
   tool_selector - выбирает инструменты и формирует инструкции (LLM → JSON)
-  tool_executor - выполняет инструменты, без LLM
-  analyzer      - добавляет результаты в контекст, без LLM
+  tool_executor - выполняет инструменты, сохраняет результаты только в history, без LLM
+  analyzer      - анализирует результаты из history и добавляет в context после фильтрации, без LLM
   refiner       - решает следующий шаг (без LLM, всегда → final)
   final         - строит ответ по накопленному контексту (LLM)
 
@@ -16,7 +16,7 @@ AgentState (TypedDict для совместимости с LangGraph):
   user_query          : str            — запрос пользователя
   plan                : list[str]      — список шагов плана (от planner)
   tool_instructions   : list[dict]     — [{tool, input}] (от tool_selector)
-  context             : list[dict]     — накопленные результаты тулов (от tool_executor)
+  context             : list[dict]     — проанализированные результаты тулов (от analyzer)
   history             : list[dict]     — структурированная история (HistoryEntry dicts)
   next_node           : str            — от refiner (всегда "final")
   final_answer        : str            — итоговый ответ JSON (от final)
@@ -213,8 +213,8 @@ class HistoryToolExecution(BaseModel):
     call_id: str
     tool: str
     args: dict[str, Any]
-    result_md: str  # dict_to_markdown(tool_result)
-
+    result: Any
+    result_md: str
 
 class HistoryToolSummary(BaseModel):
     type: Literal["tool_summary"] = "tool_summary"
@@ -617,7 +617,7 @@ def tool_selector_node(state: AgentState) -> AgentState:
 
 
 def tool_executor_node(state: AgentState) -> AgentState:
-    """Выполняет инструменты из tool_instructions. Без LLM."""
+    """Выполняет инструменты из tool_instructions и сохраняет результаты в history. Без LLM."""
     global _current_agent_state
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
@@ -649,14 +649,15 @@ def tool_executor_node(state: AgentState) -> AgentState:
                 tool_input = _fix_tool_args(tool_name, tool_input)
             except ValueError as e:
                 logger.error(f"Некорректные параметры для {tool_name}: {e}")
-                context.append({"tool": tool_name, "input": tool_input, "result": f"ERROR: {e}", "result_md": f"ERROR: {e}"})
-                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result_md=f"ERROR: {e}").model_dump())
+                err_msg = f"ERROR: {e}"
+                context.append({"tool": tool_name, "input": tool_input, "result": err_msg, "result_md": err_msg})
+                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result=err_msg, result_md=err_msg).model_dump())
                 continue
 
             if tool_name not in tools_map:
                 msg = f"ERROR: Tool {tool_name} not found"
                 context.append({"tool": tool_name, "input": tool_input, "result": msg, "result_md": msg})
-                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result_md=msg).model_dump())
+                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result=msg, result_md=msg).model_dump())
                 continue
 
             try:
@@ -665,13 +666,13 @@ def tool_executor_node(state: AgentState) -> AgentState:
                 result_dict = {"tool": tool_name, "input": tool_input, "result": serial_result}
                 result_md = dict_to_markdown(result_dict, title=f"Tool: {tool_name}")
                 context.append({**result_dict, "result_md": result_md})
-                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result_md=result_md).model_dump())
+                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result=serial_result, result_md=result_md).model_dump())
                 logger.info(f"Выполнен {tool_name}: {len(str(raw_result))} символов")
             except Exception as e:
                 logger.warning(f"Ошибка выполнения {tool_name}: {e}")
                 msg = f"ERROR: {e}"
                 context.append({"tool": tool_name, "input": tool_input, "result": msg, "result_md": msg})
-                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result_md=msg).model_dump())
+                history.append(HistoryToolExecution(call_id=call_id, tool=tool_name, args=tool_input, result=msg, result_md=msg).model_dump())
 
         # Автоматическое расширение контекста (get_neighbor_chunks)
         if AUTO_EXPAND_CONTEXT and "get_neighbor_chunks" in tools_map:
@@ -693,7 +694,7 @@ def tool_executor_node(state: AgentState) -> AgentState:
                         context.append({**exp_dict, "result_md": exp_md, "auto_expanded": True})
                         history.append(HistoryToolExecution(
                             call_id=f"expand_{expansions}", tool="get_neighbor_chunks",
-                            args=expand_input, result_md=exp_md
+                            args=expand_input, result=_to_serializable(expand_result), result_md=exp_md
                         ).model_dump())
                         expansions += 1
                         logger.info(f"Расширение контекста: {source}:{line_str}")
@@ -706,7 +707,7 @@ def tool_executor_node(state: AgentState) -> AgentState:
             "\n".join(f"  - {e['tool']}: {len(str(e['result']))} символов" for e in context)
         )
 
-        state["context"] = context
+        # НЕ сохраняем context в state - это сделает analyzer после анализа
         state["history"] = history
         _current_agent_state.update(state)  # Обновляем глобальный state перед сохранением
 
@@ -720,19 +721,34 @@ def tool_executor_node(state: AgentState) -> AgentState:
 
 
 def analyzer_node(state: AgentState) -> AgentState:
-    """Создаёт сводку по результатам инструментов. Без LLM."""
+    """Анализирует результаты инструментов из history и добавляет их в context. Без LLM."""
     global _current_agent_state
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
     llm_logger = _get_llm_logger()
-    context = state.get("context", [])
-    llm_logger.log_stage("ANALYZER START", f"Элементов контекста: {len(context)}")
 
+    # Извлекаем результаты tool execution из history
     history = list(state.get("history", []))
+    tool_executions = [h for h in history if h.get("type") == "tool_execution"]
 
-    ok     = [e for e in context if not str(e.get("result", "")).startswith("ERROR")]
-    errors = [e for e in context if str(e.get("result", "")).startswith("ERROR")]
-    total_chars = sum(len(str(e.get("result", ""))) for e in ok)
+    # Собираем context из tool execution записей
+    # TODO: здесь в будущем можно добавить логику фильтрации/анализа того, что добавлять
+    context = []
+    for te in tool_executions:
+        # Восстанавливаем формат context из HistoryToolExecution
+        # HistoryToolExecution содержит: tool, args, result, result_md
+        context.append({
+            "tool": te["tool"],
+            "input": te["args"],
+            "result": te["result"],
+            "result_md": te["result_md"]
+        })
+
+    llm_logger.log_stage("ANALYZER START", f"Элементов для анализа: {len(context)}")
+
+    ok     = [e for e in context if not str(e.get("result_md", "")).startswith("ERROR")]
+    errors = [e for e in context if str(e.get("result_md", "")).startswith("ERROR")]
+    total_chars = sum(len(str(e.get("result_md", ""))) for e in ok)
 
     lines = [
         f"Выполнено инструментов: {len(context)} (успешно: {len(ok)}, ошибок: {len(errors)})",
@@ -741,11 +757,11 @@ def analyzer_node(state: AgentState) -> AgentState:
     if ok:
         lines.append("Источники:")
         for e in ok:
-            lines.append(f"  - {e['tool']}({json.dumps(e['input'], ensure_ascii=False)[:80]}): {len(str(e['result']))} символов")
+            lines.append(f"  - {e['tool']}({json.dumps(e['input'], ensure_ascii=False)[:80]}): {len(str(e['result_md']))} символов")
     if errors:
         lines.append("Ошибки:")
         for e in errors:
-            lines.append(f"  - {e['tool']}: {e['result']}")
+            lines.append(f"  - {e['tool']}: {e['result_md'][:100]}")
 
     summary = "\n".join(lines)
     history.append(HistoryToolSummary(tool_count=len(context), content=summary).model_dump())
@@ -753,8 +769,11 @@ def analyzer_node(state: AgentState) -> AgentState:
     llm_logger.log_stage("ANALYZER COMPLETE", summary)
     logger.info(f"Analyzer: {len(ok)} успешных, {len(errors)} ошибок, {total_chars} символов")
 
+    # ТЕПЕРЬ сохраняем проанализированный context в state
+    state["context"] = context
     state["history"] = history
-    
+    _current_agent_state.update(state)  # Обновляем глобальный state перед сохранением
+
     _save_agent_state(state, "analyzer", llm_logger)
     return state
 
@@ -1099,23 +1118,19 @@ def parse_args() -> argparse.Namespace:
 
 
 def clear_logs_directory() -> None:
+    """Удаляет все файлы из папки logs при запуске агента."""
     logs_dir = Path(__file__).parent / "logs"
     if not logs_dir.exists():
         return
     deleted = 0
-    for f in logs_dir.glob("[0-9][0-9][0-9]_*.log"):
-        try:
-            f.unlink()
-            deleted += 1
-        except Exception as e:
-            logger.warning(f"Не удалось удалить {f.name}: {e}")
-    old = logs_dir / "_rag_llm.log"
-    if old.exists():
-        try:
-            old.unlink()
-            deleted += 1
-        except Exception as e:
-            logger.warning(f"Не удалось удалить _rag_llm.log: {e}")
+    # Удаляем ВСЕ файлы из папки logs
+    for f in logs_dir.iterdir():
+        if f.is_file():
+            try:
+                f.unlink()
+                deleted += 1
+            except Exception as e:
+                logger.warning(f"Не удалось удалить {f.name}: {e}")
     if deleted:
         logger.info(f"Очищена директория logs: удалено {deleted} файлов")
     global _llm_logger
