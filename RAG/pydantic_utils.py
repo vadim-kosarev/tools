@@ -531,3 +531,164 @@ def pydantic_to_markdown_detailed(obj: Any, show_full_metadata: bool = True) -> 
                 lines.append(f"- **{key}:** {value}")
 
     return "\n".join(lines)
+
+
+def dict_to_markdown(obj: Any, title: str | None = None, _level: int = 1) -> str:
+    """
+    Универсальный конвертер dict/list/любого объекта в читаемый Markdown.
+
+    Рекурсивно обходит структуру, ничего не обрезая и не теряя.
+
+    Уровни заголовков:
+      - _level=1 → # title
+      - _level=2 → ## key
+      - _level=3 → ### key
+      - _level≥4 → **key** (жирный, чтобы не переполнять Markdown)
+
+    Для примитивов — `* key: value`
+    Для списков   — нумерованный список, каждый элемент раскрывается рекурсивно.
+
+    Args:
+        obj:    Любой объект (dict, list, BaseModel, примитив).
+        title:  Заголовок верхнего уровня. Если None — заголовок не печатается.
+        _level: Текущий уровень вложенности (служебный, для рекурсии).
+
+    Returns:
+        Строка в Markdown-формате.
+
+    Examples:
+        >>> data = {"name": "Alice", "address": {"city": "Moscow", "zip": "101000"}}
+        >>> print(dict_to_markdown(data, title="User"))
+        # User
+        * name: Alice
+        ## address
+        * city: Moscow
+        * zip: 101000
+    """
+    lines: list[str] = []
+
+    def heading(text: str, level: int) -> str:
+        if level <= 3:
+            return f"{'#' * level} {text}"
+        else:
+            return f"{'  ' * (level - 4)}**{text}**"
+
+    def render(value: Any, key: str | None, level: int) -> None:
+        # Pydantic → превращаем в dict
+        if isinstance(value, BaseModel):
+            value = value.model_dump()
+
+        if isinstance(value, dict):
+            if key is not None:
+                lines.append(heading(key, level))
+            for k, v in value.items():
+                render(v, k, level + 1)
+
+        elif isinstance(value, list):
+            if key is not None:
+                lines.append(heading(key, level))
+            if not value:
+                lines.append(f"{'  ' * max(0, level - 1)}_(пусто)_")
+            for i, item in enumerate(value, 1):
+                if isinstance(item, (dict, list, BaseModel)):
+                    lines.append(heading(f"{key or 'item'}[{i}]", level + 1) if key else heading(f"item[{i}]", level))
+                    render(item, None, level + 1)
+                else:
+                    lines.append(f"{'  ' * max(0, level - 1)}{i}. {item}")
+
+        else:
+            # Примитив
+            indent = "  " * max(0, level - 2)
+            if key is not None:
+                lines.append(f"{indent}* **{key}:** {value}")
+            else:
+                lines.append(f"{indent}{value}")
+
+    if title is not None:
+        lines.append(heading(title, _level))
+
+    render(obj, None, _level)
+
+    return "\n".join(lines)
+
+
+def tool_result_to_markdown(tool_result: dict[str, Any]) -> str:
+    """
+    Конвертирует результат вызова инструмента в читаемый Markdown.
+
+    Используется при записи tool-сообщений в историю LLM, чтобы
+    вместо сырого Python repr или JSON в messages лежал читаемый текст.
+
+    Args:
+        tool_result: Словарь {'tool': str, 'input': dict, 'result': dict|str|list}
+
+    Returns:
+        Строка в Markdown-формате.
+
+    Example:
+        >>> tr = {'tool': 'exact_search', 'input': {'substring': 'X'}, 'result': {'chunks': [...], 'total_found': 5}}
+        >>> print(tool_result_to_markdown(tr))
+        ### Tool: exact_search
+        **Input:** substring=X
+        **Result:** Total found: 5 | Chunks: 3
+        ...
+    """
+    lines: list[str] = []
+
+    tool_name = tool_result.get("tool", "unknown")
+    tool_input = tool_result.get("input", {})
+    result = tool_result.get("result", {})
+
+    # Заголовок
+    lines.append(f"### Tool: {tool_name}")
+    lines.append("")
+
+    # Параметры вызова — компактно в одну строку
+    if isinstance(tool_input, dict) and tool_input:
+        params = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
+        lines.append(f"**Input:** {params}")
+
+    # Результат
+    if isinstance(result, str):
+        # Строка — ошибка или примитив
+        lines.append(f"**Result:**")
+        lines.append(f"```")
+        lines.append(result)
+        lines.append(f"```")
+    elif isinstance(result, dict):
+        chunks = result.get("chunks", [])
+        total_found = result.get("total_found", len(chunks))
+        query = result.get("query", "")
+
+        summary_parts = []
+        if query:
+            summary_parts.append(f"query={query!r}")
+        summary_parts.append(f"total_found={total_found}")
+        summary_parts.append(f"chunks={len(chunks)}")
+        lines.append(f"**Result:** {', '.join(summary_parts)}")
+        lines.append("")
+
+        for i, chunk in enumerate(chunks, 1):
+            if not isinstance(chunk, dict):
+                continue
+
+            content: str = chunk.get("content", "")
+            metadata: dict = chunk.get("metadata", {})
+            source = metadata.get("source", "?")
+            section = metadata.get("section", "?")
+            line_start = metadata.get("line_start", "?")
+            score = chunk.get("score")
+
+            score_str = f" score={score:.3f}" if score is not None else ""
+            lines.append(f"{i}. [{source}] {section} (line {line_start}{score_str})")
+
+            if content:
+                preview = content if len(content) <= 300 else content[:297] + "..."
+                # Убираем лишние переносы для компактности
+                preview = preview.replace("\n", " ").strip()
+                lines.append(f"   > {preview}")
+    else:
+        lines.append(f"**Result:** {result!r}")
+
+    return "\n".join(lines)
+

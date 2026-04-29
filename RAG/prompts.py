@@ -1,5 +1,22 @@
 """
-Централизованное хранилище промптов для RAG-агента.
+[DEPRECATED] Централизованное хранилище промптов для RAG-агента.
+
+⚠️ ВНИМАНИЕ: Этот модуль больше не используется в основном коде!
+
+Новый код должен использовать prompt_loader напрямую:
+    
+    from prompt_loader import get_loader
+    _loader = get_loader()
+    
+    # Вместо prompts.get_plan_system_prompt(state)
+    _loader.render_plan_system(state)
+    
+    # Или напрямую
+    _loader.render('plan/system.md', state)
+
+Этот файл оставлен только для обратной совместимости со старым кодом.
+
+---
 
 ⚠️ ВАЖНО: Промпты теперь хранятся в .md файлах (папка prompts/)
 Этот модуль - обертка для обратной совместимости.
@@ -14,49 +31,50 @@
     prompts/
         system_prompt_base.md     - Базовый системный промпт
         plan/
+            prompt.md             - Полный промпт (SYSTEM + TOOLS + MESSAGES + USER)
             system.md             - System message для plan_node
             user.md               - User message для plan_node
-            retry.md              - Retry message
-        action/system.md, user.md, retry.md
-        observation/system.md, user.md, retry.md
-        refine/system.md, user.md, retry.md
-        final/system.md, user.md
+            user.md              - Retry message
+        action/prompt.md, system.md, user.md, user.md
+        observation/prompt.md, system.md, user.md, user.md
+        refine/prompt.md, system.md, user.md, user.md
+        final/prompt.md, system.md, user.md
 
 Использование IDE Find Usages:
     - Чтобы найти где используется промпт - нажмите на функцию и выберите Find Usages
     - Чтобы изменить промпт - редактируйте соответствующий .md файл в папке prompts/
 
-Структура API (все функции имеют единую сигнатуру (state: dict)):
+Структура API:
+    ПОЛНЫЕ ПРОМПТЫ (рекомендуется использовать):
+    - get_plan_prompt(state) - полный промпт для plan_node
+    - get_action_prompt(state) - полный промпт для action_node
+    - get_observation_prompt(state) - полный промпт для observation_node
+    - get_refine_prompt(state) - полный промпт для refine_node
+    - get_final_prompt(state) - полный промпт для final_node
+
+    ЧАСТИЧНЫЕ ПРОМПТЫ (для обратной совместимости):
     - get_system_prompt_base(state) - базовый системный промпт
-    - get_plan_system_prompt(state) - system message для plan_node
-    - get_plan_user_prompt(state) - user message для plan_node
-    - get_plan_retry_prompt(state) - retry message для plan_node
-    - get_action_system_prompt(state) - system message для action_node
-    - get_action_user_prompt(state) - user message для action_node
-    - get_action_retry_prompt(state) - retry message для action_node
-    - get_observation_system_prompt(state) - system message для observation_node
-    - get_observation_user_prompt(state) - user message для observation_node
-    - get_observation_retry_prompt(state) - retry message для observation_node
-    - get_refine_system_prompt(state) - system message для refine_node
-    - get_refine_user_prompt(state) - user message для refine_node
-    - get_refine_retry_prompt(state) - retry message для refine_node
-    - get_final_system_prompt(state) - system message для final_node
-    - get_final_user_prompt(state) - user message для final_node
+    - get_plan_system_prompt(state), get_plan_user_prompt(state), get_plan_retry_prompt(state)
+    - get_action_system_prompt(state), get_action_user_prompt(state), get_action_retry_prompt(state)
+    - get_observation_system_prompt(state), get_observation_user_prompt(state), get_observation_retry_prompt(state)
+    - get_refine_system_prompt(state), get_refine_user_prompt(state), get_refine_retry_prompt(state)
+    - get_final_system_prompt(state), get_final_user_prompt(state)
 
 Ожидаемые ключи в state:
-    - system_prompt: str - базовый системный промпт (опционально, для совместимости)
     - user_query: str - вопрос пользователя
     - iteration: int - текущая итерация
-    - MAX_ITERATIONS: int - максимальное количество итераций
     - step: int - текущий шаг
-    - plan: list - план поиска
-    - refinement_plan: list - план уточнения (опционально)
-    - observation: str - результат наблюдения
-    - all_tool_results: list - все результаты инструментов
-    - tools_json: str - JSON с результатами инструментов (для observation_node)
-    - total_tools: int - общее количество выполненных инструментов (для final_node)
-    - all_results_json: str - JSON со всеми результатами (для final_node)
-    - available_tools: str - JSON со списком доступных инструментов (для system_prompt_base)
+    - MAX_ITERATIONS: int - максимальное количество итераций
+    - messages: list[dict] - история сообщений
+    - available_tools: str - JSON со списком доступных инструментов
+    - tool_calls: list[dict] - вызовы инструментов (для observation)
+    - plan: list[str] - план действий
+    - refinement_plan: list[str] - план уточнения (для refine)
+    - observation: str - результат observation
+    - all_tool_results: list[dict] - все результаты инструментов
+    - tools_json: str - JSON с результатами инструментов (для observation)
+    - total_tools: int - количество выполненных инструментов (для final)
+    - all_results_json: str - JSON со всеми результатами (для final)
 """
 
 from prompt_loader import get_loader
@@ -95,13 +113,23 @@ def get_plan_user_prompt(state: dict) -> str:
 
 
 def get_plan_retry_prompt(state: dict) -> str:
-    """Retry message для plan node. Загружается из plan/retry.md."""
+    """Retry message для plan node. Загружается из plan/user.md."""
     return _loader.render_plan_retry(state)
 
 
 # ---------------------------------------------------------------------------
 # ACTION NODE PROMPTS
 # ---------------------------------------------------------------------------
+
+def get_action_prompt(state: dict) -> str:
+    """
+    Полный промпт для action node (включает SYSTEM, TOOLS, MESSAGES, USER).
+    Загружается из action/prompt.md.
+
+    Использует: action/system.md, action/user.md, available_tools, messages
+    """
+    return _loader.render('action/prompt.md', state)
+
 
 def get_action_system_prompt(state: dict) -> str:
     """System message для action node. Загружается из action/system.md."""
@@ -114,7 +142,7 @@ def get_action_user_prompt(state: dict) -> str:
 
 
 def get_action_retry_prompt(state: dict) -> str:
-    """Retry message для action node. Загружается из action/retry.md."""
+    """Retry message для action node. Загружается из action/user.md."""
     return _loader.render_action_retry(state)
 
 
@@ -133,7 +161,7 @@ def get_observation_user_prompt(state: dict) -> str:
 
 
 def get_observation_retry_prompt(state: dict) -> str:
-    """Retry message для observation node. Загружается из observation/retry.md."""
+    """Retry message для observation node. Загружается из observation/user.md."""
     return _loader.render_observation_retry(state)
 
 
@@ -152,13 +180,23 @@ def get_refine_user_prompt(state: dict) -> str:
 
 
 def get_refine_retry_prompt(state: dict) -> str:
-    """Retry message для refine node. Загружается из refine/retry.md."""
+    """Retry message для refine node. Загружается из refine/user.md."""
     return _loader.render_refine_retry(state)
 
 
 # ---------------------------------------------------------------------------
 # FINAL NODE PROMPTS
 # ---------------------------------------------------------------------------
+
+def get_final_prompt(state: dict) -> str:
+    """
+    Полный промпт для final node (включает SYSTEM, MESSAGES, USER).
+    Загружается из final/prompt.md.
+
+    Использует: final/system.md, final/user.md, messages
+    """
+    return _loader.render('final/prompt.md', state)
+
 
 def get_final_system_prompt(state: dict) -> str:
     """System message для final node. Загружается из final/system.md."""

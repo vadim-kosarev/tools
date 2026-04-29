@@ -20,6 +20,7 @@ RAG-чат по документации СОИБ КЦОИ.
                              # Было: qwen2.5:14b
     OLLAMA_EMBED_MODEL     — модель эмбеддингов (по умолчанию bge-m3)
     KNOWLEDGE_DIR          — папка с .md файлами источников знаний
+    PROMPTS_DIR            — папка с промптами относительно RAG/ (по умолчанию prompts, можно prompts_v2)
     CLICKHOUSE_HOST        — хост ClickHouse (по умолчанию localhost)
     CLICKHOUSE_PORT        — порт ClickHouse HTTP (по умолчанию 8123)
     CLICKHOUSE_USERNAME    — пользователь (по умолчанию clickhouse)
@@ -51,6 +52,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import OllamaEmbeddings, ChatOllama
+from logging_config import setup_logging
 
 
 load_dotenv()
@@ -76,6 +78,7 @@ class Settings(BaseSettings):
     ollama_final_model: str = "hf.co/hesamation/Qwen3.6-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M"  # Claude-distilled модель для финального ответа
     ollama_embed_model: str = "bge-m3"
     knowledge_dir: str = r"Z:\ES-Leasing\СОИБ КЦОИ"
+    prompts_dir: str = "prompts.bak"  # Папка с промптами относительно RAG/ (по умолчанию 'prompts', можно 'prompts_v2')
     # ClickHouse connection
     clickhouse_host:     str = "localhost"
     clickhouse_port:     int = 8123
@@ -95,6 +98,7 @@ class Settings(BaseSettings):
     reranker_top_n: int = 15          # top-N anchors kept after LLM reranking (step 2.5)
     hyde_enabled: bool = True
     llm_log_enabled: bool = True           # write LLM prompts/responses to logs/_rag_*.log
+    log_level: str = "DEBUG"               # logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
     # Cross-session memory (ClickHouse table in the same database)
     agent_memory_table:          str   = "agent_memory"
     agent_memory_enabled:        bool  = True
@@ -356,12 +360,6 @@ PROMPT_TEMPLATE = """\
 
 
 def build_llm(model: Optional[str] = None) -> ChatOllama:
-    """
-    Создаёт экземпляр LLM с поддержкой streaming для live-вывода.
-    
-    Args:
-        model: Имя модели Ollama. Если None, использует settings.ollama_model
-    """
     return ChatOllama(
         model=model or settings.ollama_model,
         base_url=settings.ollama_base_url,
@@ -498,8 +496,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     # Настраиваем логирование в файл + консоль
-    _setup_logging("rag_chat")
-    
+    setup_logging("rag_chat")
+
     args = parse_args()
 
     logger.info(

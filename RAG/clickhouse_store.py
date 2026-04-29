@@ -287,7 +287,7 @@ class ClickHouseVectorStore(VectorStore):
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index,
                    cosineDistance(embedding, {{query_vec:Array(Float32)}}) AS distance
             FROM {self._cfg.database}.{self._cfg.table} FINAL
@@ -298,8 +298,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[tuple[Document, float]] = []
         for row in result.result_rows:
-            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index, distance = row
+            chunk_id, source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index, distance = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  chunk_type_val,
@@ -347,7 +348,7 @@ class ClickHouseVectorStore(VectorStore):
         order_by = "ORDER BY line_start, chunk_index" if source else ""
         
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {self._cfg.database}.{self._cfg.table} FINAL
             WHERE {" AND ".join(where_clauses)}
@@ -358,8 +359,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[Document] = []
         for row in result.result_rows:
-            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            chunk_id, source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  chunk_type_val,
@@ -395,7 +397,7 @@ class ClickHouseVectorStore(VectorStore):
             where_clauses.append("chunk_type = {ct:String}")
 
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {self._cfg.database}.{self._cfg.table} FINAL
             WHERE {" AND ".join(where_clauses)}
@@ -409,8 +411,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[Document] = []
         for row in result.result_rows:
-            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            chunk_id, source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  chunk_type_val,
@@ -449,7 +452,7 @@ class ClickHouseVectorStore(VectorStore):
             where_clauses.append("chunk_type = {ct:String}")
 
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {self._cfg.database}.{self._cfg.table} FINAL
             WHERE {" AND ".join(where_clauses)}
@@ -468,8 +471,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[Document] = []
         for row in result.result_rows:
-            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            chunk_id, source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  chunk_type_val,
@@ -540,7 +544,7 @@ class ClickHouseVectorStore(VectorStore):
             params["sec"] = section
 
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index,
                    {match_expr} AS match_count
             FROM {self._cfg.database}.{self._cfg.table} FINAL
@@ -552,8 +556,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[tuple[Document, int]] = []
         for row in result.result_rows:
-            source, section, ct_val, table_headers, content, line_start, line_end, chunk_index, match_count = row
+            chunk_id, source, section, ct_val, table_headers, content, line_start, line_end, chunk_index, match_count = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  ct_val,
@@ -674,7 +679,7 @@ class ClickHouseVectorStore(VectorStore):
         """
         where = f"WHERE chunk_type = '{{ct:String}}'" if chunk_type is not None else ""
         sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {self._cfg.database}.{self._cfg.table} FINAL
             {where}
@@ -688,8 +693,9 @@ class ClickHouseVectorStore(VectorStore):
         result = self._client.query(sql, parameters=params)
         docs: list[Document] = []
         for row in result.result_rows:
-            source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
+            chunk_id, source, section, chunk_type_val, table_headers, content, line_start, line_end, chunk_index = row
             meta: dict = {
+                "chunk_id":    str(chunk_id),
                 "source":      source,
                 "section":     section,
                 "chunk_type":  chunk_type_val,
@@ -725,8 +731,9 @@ class ClickHouseVectorStore(VectorStore):
             result = self._client.query(sql, parameters=params)
             docs: list[Document] = []
             for row in result.result_rows:
-                src, sec, ct, th, content, ls, le, ci = row
+                chunk_id, src, sec, ct, th, content, ls, le, ci = row
                 meta: dict = {
+                    "chunk_id":    str(chunk_id),
                     "source":      src,
                     "section":     sec,
                     "chunk_type":  ct,
@@ -740,7 +747,7 @@ class ClickHouseVectorStore(VectorStore):
             return docs
 
         prev_sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {db}.{tbl} FINAL
             WHERE source = {{src:String}}
@@ -749,7 +756,7 @@ class ClickHouseVectorStore(VectorStore):
             LIMIT {{n:UInt32}}
         """
         next_sql = f"""
-            SELECT source, section, chunk_type, table_headers, content,
+            SELECT id, source, section, chunk_type, table_headers, content,
                    line_start, line_end, chunk_index
             FROM {db}.{tbl} FINAL
             WHERE source = {{src:String}}

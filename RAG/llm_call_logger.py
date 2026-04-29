@@ -141,6 +141,7 @@ class LlmCallLogger:
         log_dir: Directory for the log file (created automatically).
         stream_to_console: If True, print streaming tokens to stdout in real-time.
         separate_files: If True, write each request/response to separate numbered files.
+        state_callback: Optional callback function() → dict to save agent state alongside logs.
     """
 
     def __init__(
@@ -148,7 +149,8 @@ class LlmCallLogger:
         enabled: bool = False,
         log_dir: Path = _DEFAULT_LOG_DIR,
         stream_to_console: bool = True,
-        separate_files: bool = True
+        separate_files: bool = True,
+        state_callback: Any = None
     ) -> None:
         self._enabled = enabled
         self._log_dir = log_dir
@@ -156,6 +158,7 @@ class LlmCallLogger:
         self._separate_files = separate_files
         self._counter = 0
         self._lock    = threading.Lock()
+        self._state_callback = state_callback
 
         if enabled:
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -219,6 +222,19 @@ class LlmCallLogger:
                 with path.open("w", encoding="utf-8") as f:
                     f.write(block)
                     f.flush()
+
+                # Сохраняем state рядом с .log файлом
+                if self._state_callback:
+                    try:
+                        state = self._state_callback()
+                        if state:
+                            state_filename = filename.replace(".log", ".json")
+                            state_path = self._log_dir / state_filename
+                            import json
+                            with state_path.open("w", encoding="utf-8") as sf:
+                                json.dump(state, sf, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass  # Не падаем если не удалось сохранить state
             else:
                 # Пишем в общий файл _rag_llm.log
                 path = self._log_dir / _LOG_FILE
@@ -292,6 +308,18 @@ class LlmCallLogger:
                 with file_path.open("a", encoding="utf-8") as f:
                     f.write(block)
                     f.flush()
+
+                # Сохраняем state рядом с .log файлом (после завершения response)
+                if self._state_callback:
+                    try:
+                        state = self._state_callback()
+                        if state:
+                            state_filename = file_path.name.replace(".log", ".json")
+                            state_path = self._log_dir / state_filename
+                            with state_path.open("w", encoding="utf-8") as sf:
+                                json.dump(state, sf, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass  # Не падаем если не удалось сохранить state
             else:
                 # Append to single log file
                 path = self._log_dir / _LOG_FILE
@@ -400,10 +428,13 @@ def _fmt_message_list(messages: list[list[BaseMessage]], model_name: str = "") -
                 content = msg.content
             elif isinstance(msg.content, (dict, list)):
                 # Dict или list - сериализуем в JSON с отступами для читаемости
-                content = json.dumps(msg.content, ensure_ascii=False, indent=2, default=str)
+                # Обрамляем тегами ```json для синтаксической подсветки
+                json_content = json.dumps(msg.content, ensure_ascii=False, indent=2, default=str)
+                content = f"```json\n{json_content}\n```"
             else:
                 # Другие типы - преобразуем в JSON
-                content = json.dumps(msg.content, ensure_ascii=False, default=str)
+                json_content = json.dumps(msg.content, ensure_ascii=False, default=str)
+                content = f"```json\n{json_content}\n```"
 
             all_messages.append((role, msg, content))
 
@@ -433,9 +464,9 @@ def _fmt_message_list(messages: list[list[BaseMessage]], model_name: str = "") -
                 # AI messages may have tool_calls
                 tool_calls = getattr(msg, "tool_calls", None)
                 if tool_calls:
-                    # Компактный JSON для tool_calls (как и для AVAILABLE_TOOLS)
-                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, separators=(',', ':'))
-                    parts.append(f"\n[#{msg_num} ASSISTANT]\n{content}\n\n[TOOL_CALLS]\n{tc_json}")
+                    # JSON для tool_calls с обрамлением ```json тегами
+                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, indent=2)
+                    parts.append(f"\n[#{msg_num} ASSISTANT]\n{content}\n\n[TOOL_CALLS]\n```json\n{tc_json}\n```")
                 else:
                     parts.append(f"\n[#{msg_num} ASSISTANT]\n{content}")
             elif role == "TOOL":
@@ -458,9 +489,9 @@ def _fmt_llm_result(response: LLMResult) -> str:
                 content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 tool_calls = getattr(msg, "tool_calls", None)
                 if tool_calls:
-                    # Компактный JSON для tool_calls
-                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, separators=(',', ':'))
-                    parts.append(f"{content}\n\n[TOOL_CALLS]\n{tc_json}")
+                    # JSON для tool_calls с обрамлением ```json тегами
+                    tc_json = json.dumps(tool_calls, ensure_ascii=False, default=str, indent=2)
+                    parts.append(f"{content}\n\n[TOOL_CALLS]\n```json\n{tc_json}\n```")
                 else:
                     parts.append(content)
             elif hasattr(gen, "text"):
@@ -587,9 +618,21 @@ class LangChainFileLogger(BaseCallbackHandler):
         if not self._log._enabled:
             return
         tool_name = serialized.get("name", "tool")
+        
+        # Попытка отформатировать input_str как JSON для читаемости
+        formatted_input = input_str
+        try:
+            # Попробуем распарсить как JSON и красиво отформатировать с обрамлением ```json
+            parsed = json.loads(input_str)
+            json_content = json.dumps(parsed, ensure_ascii=False, indent=2)
+            formatted_input = f"```json\n{json_content}\n```"
+        except (json.JSONDecodeError, TypeError):
+            # Если не JSON - оставляем как есть
+            pass
+        
         rec = self._log.start_record(f"TOOL:{tool_name}")
-        rec.set_request(input_str)
-        self._tool_records[str(run_id)] = (rec, input_str)
+        rec.set_request(formatted_input)
+        self._tool_records[str(run_id)] = (rec, formatted_input)
 
     def on_tool_end(
         self,
@@ -601,8 +644,19 @@ class LangChainFileLogger(BaseCallbackHandler):
         entry = self._tool_records.pop(str(run_id), None)
         if entry:
             rec, input_str = entry
+
+            # Форматируем output - если это dict/list, обрамляем ```json тегами
+            output_str = str(output)
+            if isinstance(output, (dict, list)):
+                try:
+                    json_content = json.dumps(output, ensure_ascii=False, indent=2)
+                    output_str = f"```json\n{json_content}\n```"
+                except (TypeError, ValueError):
+                    # Если не сериализуется - оставляем как строку
+                    pass
+
             # Prepend full arguments to response for easier log reading
-            response_text = f"[args]\n{input_str}\n{'-' * 40}\n{str(output)}"
+            response_text = f"[args]\n{input_str}\n{'-' * 40}\n{output_str}"
             rec.set_response(response_text)
 
     def on_tool_error(

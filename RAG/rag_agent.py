@@ -48,6 +48,7 @@ from rag_chat import (
 from clickhouse_store import ClickHouseVectorStore
 from md_splitter import _clean_text as _clean_header_text
 from llm_call_logger import LlmCallLogger
+from logging_config import setup_logging
 
 # Heading regex (was in rag_chat before md_splitter refactoring)
 _HEADER_RE = _re.compile(r"^(#{1,4})\s+(.+)$")
@@ -1471,7 +1472,7 @@ def main() -> None:
     import argparse
     
     # Настраиваем логирование в файл + консоль
-    _setup_logging("rag_agent")
+    setup_logging("rag_agent")
 
     parser = argparse.ArgumentParser(description="Agentic RAG-чат по документации СОИБ КЦОИ")
     parser.add_argument("question", nargs="*", help="Вопрос (если не указан — интерактивный режим)")

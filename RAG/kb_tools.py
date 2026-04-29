@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 class ChunkMetadata(BaseModel):
     """Метаданные чанка"""
+    chunk_id: str = Field(description="Уникальный идентификатор чанка (UUID)")
     source: str = Field(description="Имя файла")
     section: str = Field(description="Путь раздела через ' > '")
     chunk_type: str = Field(description="Тип чанка: table_row, table_full, или '' (проза)")
@@ -65,6 +66,10 @@ class ChunkResult(BaseModel):
     """Результат поиска чанков"""
     content: str = Field(description="Содержимое чанка")
     metadata: ChunkMetadata = Field(description="Метаданные чанка")
+    score: Optional[float] = Field(
+        default=None, 
+        description="Оценка релевантности (distance для semantic search, coverage для multi-term)"
+    )
 
 
 class ScoredChunkResult(BaseModel):
@@ -239,17 +244,23 @@ def _doc_to_chunk_metadata(meta: dict) -> ChunkMetadata:
     )
 
 
-def _doc_to_chunk_result(doc: Document) -> ChunkResult:
+def _doc_to_chunk_result(doc: Document, score: Optional[float] = None) -> ChunkResult:
     """Конвертер Document → ChunkResult"""
     return ChunkResult(
         content=doc.page_content,
-        metadata=_doc_to_chunk_metadata(doc.metadata)
+        metadata=_doc_to_chunk_metadata(doc.metadata),
+        score=score
     )
 
 
 def _docs_to_chunk_results(docs: list[Document]) -> list[ChunkResult]:
     """Конвертер списка Document → список ChunkResult"""
     return [_doc_to_chunk_result(doc) for doc in docs]
+
+
+def _docs_with_scores_to_chunk_results(docs_scores: list[tuple[Document, float]]) -> list[ChunkResult]:
+    """Конвертер списка (Document, score) → список ChunkResult с scores"""
+    return [_doc_to_chunk_result(doc, score) for doc, score in docs_scores]
 
 
 def _doc_to_scored_chunk(doc: Document, score: float) -> ScoredChunkResult:
@@ -663,6 +674,7 @@ def create_kb_tools(
         Returns top-K most semantically similar text chunks from ClickHouse.
         By default searches only in prose chunks (chunk_type=""), not in full tables.
         Metadata includes: source file, section breadcrumb, line_start for context expansion.
+        Each result includes score (cosine distance) indicating relevance (lower = more similar).
 
         Optional filters:
         - chunk_type: filter by chunk type (default: "" for prose only)
@@ -670,7 +682,7 @@ def create_kb_tools(
         - section: limit search to specific section substring
         
         Returns:
-            SearchChunksResult with query, list of chunks with metadata, and total_found count
+            SearchChunksResult with query, list of chunks with metadata and scores, and total_found count
         """
         filter_info = []
         if chunk_type:
@@ -684,13 +696,13 @@ def create_kb_tools(
         logger.debug(f"Tool semantic_search: query='{query[:80]}'{filter_str}, top_k={top_k}")
         rec = _db_request("DB:semantic_search", f"query={query!r}\ntop_k={top_k}{filter_str}")
         
-        # Поиск с фильтром по chunk_type
-        docs = vectorstore.clone().similarity_search(
+        # Поиск с фильтром по chunk_type (получаем scores)
+        docs_scores = vectorstore.clone().similarity_search_with_score(
             query, k=top_k, chunk_type=chunk_type, source=source, section=section
         )
         
-        # Конвертация в структурированный результат и дедупликация
-        chunks = _deduplicate_chunks(_docs_to_chunk_results(docs))
+        # Конвертация в структурированный результат с scores и дедупликация
+        chunks = _deduplicate_chunks(_docs_with_scores_to_chunk_results(docs_scores))
         result = SearchChunksResult(
             query=query,
             chunks=chunks,
@@ -699,7 +711,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {len(chunks)} чанков\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"semantic_search '{query[:60]}'{filter_str}: {len(chunks)} чанков")
         
         return result
@@ -759,7 +771,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {len(chunks)} чанков\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"exact_search '{substring}'{filter_str}: {len(chunks)} чанков")
         
         return result
@@ -803,7 +815,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {len(chunks)} чанков в {source_file}\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"exact_search_in_file '{substring}' in {source_file}: {len(chunks)} чанков")
         
         return result
@@ -852,7 +864,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {len(chunks)} чанков в [{source_file}] -> {section}\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"exact_search_in_file_section '{substring}' в [{source_file}] -> {section}: {len(chunks)} чанков"
         )
@@ -939,7 +951,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {result.total_chunks} чанков\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"multi_term_exact_search {unique_terms}{filter_str}: {result.total_chunks} чанков  "
             f"(max coverage {result.max_coverage}/{len(unique_terms)})"
@@ -1013,7 +1025,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {result.total_found} разделов\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"find_sections_by_term '{substring}'{filter_str}: "
             f"{result.total_found} разделов"
@@ -1141,7 +1153,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {result.total_found}, возвращено топ-{result.returned_count}\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"find_relevant_sections '{query}'{filter_str}: "
             f"найдено {result.total_found} разделов, возвращено топ-{result.returned_count} "
@@ -1190,7 +1202,7 @@ def create_kb_tools(
 
         # Логирование
         if rec:
-            rec.set_response(f"total_matches={result.total_matches}\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"regex_search '{pattern}': {result.total_matches} совпадений")
 
         return result
@@ -1226,7 +1238,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {result.total_rows} строк\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"read_table '{section}': {result.total_rows} записей")
         
         return result
@@ -1472,7 +1484,7 @@ def create_kb_tools(
         if anchor_chunk:
             total_chunks += 1
         if rec:
-            rec.set_response(f"Найдено {total_chunks} чанков (якорь: {'да' if anchor_chunk else 'нет'})\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"get_neighbor_chunks: {total_chunks} чанков вокруг [{source}] line {line_start} "
             f"(якорь: {'включен' if anchor_chunk else 'не включен'})"
@@ -1553,7 +1565,7 @@ def create_kb_tools(
         
         # Логирование
         if rec:
-            rec.set_response(f"Найдено {len(chunks)} чанков\n\n{result.model_dump_json(indent=2)}")
+            rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"get_chunks_by_index: {len(chunks)} чанков из [{source}] {section}, "
             f"indices={chunk_indices}"
@@ -1699,6 +1711,11 @@ def get_tool_registry() -> dict[str, str]:
         "list_sources": "Список файлов в базе знаний",
         "list_all_sections": "Все уникальные пары (source, section)",
     }
+
+
+
+
+
 
 
 

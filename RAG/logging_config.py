@@ -5,6 +5,7 @@
 - Также выводятся в stderr для отладки в реальном времени
 - Используется RotatingFileHandler (макс 10MB на файл, 5 backup-файлов)
 - Формат с таймстампом, уровнем и сообщением
+- Уровень логирования читается из переменной окружения LOG_LEVEL (по умолчанию DEBUG)
 
 Usage:
     from logging_config import setup_logging
@@ -13,6 +14,7 @@ Usage:
     logger.info("Agent started")
 """
 import logging
+import os
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
@@ -20,7 +22,7 @@ from logging.handlers import RotatingFileHandler
 
 def setup_logging(
     agent_name: str,
-    level: int = logging.INFO,
+    level: int | None = None,
     log_dir: Path | None = None,
     max_bytes: int = 10 * 1024 * 1024,  # 10 MB
     backup_count: int = 5,
@@ -30,7 +32,7 @@ def setup_logging(
     
     Args:
         agent_name: Имя агента (используется для имени лог-файла)
-        level: Уровень логирования (по умолчанию INFO)
+        level: Уровень логирования (если None, читается из LOG_LEVEL env, по умолчанию DEBUG)
         log_dir: Директория для лог-файлов (по умолчанию logs/ в текущей папке)
         max_bytes: Максимальный размер одного лог-файла (по умолчанию 10MB)
         backup_count: Количество backup-файлов при ротации (по умолчанию 5)
@@ -39,6 +41,11 @@ def setup_logging(
     Returns:
         Настроенный logger для агента
     """
+    # Определяем уровень логирования из .env или используем DEBUG по умолчанию
+    if level is None:
+        log_level_str = os.getenv("LOG_LEVEL", "DEBUG").upper()
+        level = getattr(logging, log_level_str, logging.DEBUG)
+
     # Определяем директорию для логов
     if log_dir is None:
         log_dir = Path(__file__).parent / "logs"
