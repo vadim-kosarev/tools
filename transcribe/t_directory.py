@@ -8,10 +8,22 @@ r"""
 для получения транскрипции.
 
 Usage:
-    python t_directory.py <directory> [--script t_gigaam_simple.py] [--revision e2e_rnnt] [--device auto]
+    python t_directory.py <directory> [--script script.py] [--revision e2e_rnnt] [--device auto] [--recursive] [--no-recursive] [-- extra args]
+    
+    # Простая транскрибация (по умолчанию - рекурсивный обход)
     python t_directory.py H:\videos --device cuda
-    python t_directory.py C:\media --script t_gigaam.py --device cuda
-    python t_directory.py C:\media --script t_gigaam_blocks.py --revision e2e_ctc --device cpu
+    
+    # С диаризацией спикеров (только текущая папка)
+    python t_directory.py C:\media --script t_gigaam_speakers.py --device cuda --no-recursive
+    
+    # С блоками (рекурсивный обход явно)
+    python t_directory.py C:\media --script t_gigaam_blocks.py --revision e2e_ctc --device cpu --recursive
+    
+    # С диаризацией и параметром для спикеров (передается вложенному скрипту)
+    python t_directory.py C:\media --script t_gigaam_speakers.py --device cuda --num-speakers 3
+    
+    # С принудительной переобработкой (только текущая папка)
+    python t_directory.py C:\media --force --device cuda --no-recursive
 """
 
 import argparse
@@ -67,7 +79,7 @@ def get_transcription_status(file_path: Path, revision: str) -> TranscriptionSta
 
     Args:
         file_path: Путь к медиафайлу
-        revision: Используемая ревизия модели
+        revision: Используемая ревизия модели (не используется для поиска - для совместимости API)
 
     Returns:
         TranscriptionStatus:
@@ -78,9 +90,48 @@ def get_transcription_status(file_path: Path, revision: str) -> TranscriptionSta
     stem = file_path.stem
     parent = file_path.parent
 
-    # Паттерн поиска: <имя>.gigaam-<revision>-*.txt
-    pattern = f"{stem}.gigaam-{revision}-*.txt"
-    matching_files = list(parent.glob(pattern))
+    # Ищем файлы транскрипции вида: <stem>.<суффикс>.txt
+    # Например: audio.gigaam-e2e_rnnt-abc123.txt, audio.mymodel-1.0.txt
+    # Используем прямой поиск в файлах папки (без glob) чтобы избежать проблем
+    # с экранированием специальных символов типа [ и ]
+    matching_files = []
+    try:
+        for file_obj in parent.iterdir():
+            if file_obj.is_file():
+                # Проверяем: имя начинается с <stem>. и заканчивается на .txt
+                if file_obj.name.startswith(f"{stem}.") and file_obj.name.endswith(".txt"):
+                    matching_files.append(file_obj)
+    except OSError:
+        return TranscriptionStatus.NOT_ATTEMPTED
+
+    if not matching_files:
+        # Нет файлов транскрипции
+        return TranscriptionStatus.NOT_ATTEMPTED
+
+    # Проверяем найденные файлы
+    has_empty = False
+    has_non_empty = False
+
+    for transcription_path in matching_files:
+        try:
+            file_size = transcription_path.stat().st_size
+            if file_size == 0:
+                has_empty = True
+            else:
+                has_non_empty = True
+        except OSError:
+            continue
+
+    # Приоритет: если есть хотя бы один непустой файл - SUCCESS
+    if has_non_empty:
+        return TranscriptionStatus.SUCCESS
+
+    # Если есть только пустые файлы - FAILED
+    if has_empty:
+        return TranscriptionStatus.FAILED
+
+    # Файлы есть, но недоступны (OSError) - считаем как NOT_ATTEMPTED
+    return TranscriptionStatus.NOT_ATTEMPTED
 
     if not matching_files:
         # Нет файлов транскрипции
@@ -115,25 +166,28 @@ def get_transcription_status(file_path: Path, revision: str) -> TranscriptionSta
 def collect_media_files(
         directory: Path,
         skip_existing: bool = True,
-        revision: str = "e2e_rnnt"
+        revision: str = "e2e_rnnt",
+        recursive: bool = True
 ) -> List[Path]:
     """
-    Собирает все медиафайлы в директории рекурсивно.
+    Собирает все медиафайлы в директории.
 
     Args:
         directory: Корневая директория для поиска
-        skip_existing: Пропускать файлы с существующей транскрипцией
-        revision: Ревизия модели для проверки существующих файлов
+        skip_existing: Пропускать файлы с существующей транскрипцией (от любого транскрайбера)
+        revision: Для совместимости API (не используется - проверяются все транскрипции)
+        recursive: Рекурсивный обход подпапок (True) или только текущая папка (False)
 
     Returns:
-        Список путей к медиафайлам для обработки
+        Список путей к медиафайлам для обработки (отсортирован от новых к старым)
     """
-    logger.info(f"Сканирование директории: {directory}")
-
     media_files = []
     skipped_count = 0
 
-    for file_path in directory.rglob('*'):
+    # Выбираем тип обхода: рекурсивный (rglob) или текущей папки (glob)
+    search_pattern = directory.rglob('*') if recursive else directory.glob('*')
+
+    for file_path in search_pattern:
         if not file_path.is_file():
             continue
 
@@ -150,45 +204,100 @@ def collect_media_files(
 
         media_files.append(file_path)
 
-    logger.info(
-        f"Найдено медиафайлов:\n"
-        f"  - Для обработки: {len(media_files)}\n"
-        f"  - Пропущено (уже обработано): {skipped_count}\n"
-        f"  - Всего: {len(media_files) + skipped_count}\n"
-        f"  - Порядок обработки: от новых к старым (по времени изменения)"
-    )
-
     # Сортируем по времени модификации (от новых к старым)
     sorted_files = sorted(media_files, key=lambda p: p.stat().st_mtime, reverse=True)
 
-    # Логируем первые 5 файлов для проверки
-    if sorted_files:
-        logger.info("Первые файлы для обработки:")
-        for i, file_path in enumerate(sorted_files[:5], 1):
+    return sorted_files
+
+
+def log_queue_status(media_files: List[Path], total_processed: int, total_skipped: int) -> None:
+    """
+    Выводит информацию о файлах, которые в очереди на обработку.
+
+    Args:
+        media_files: Список файлов для обработки
+        total_processed: Количество уже обработанных файлов в этой сессии
+        total_skipped: Количество пропущенных файлов (уже имеют транскрипцию)
+    """
+    if not media_files:
+        return
+
+    total_files_in_queue = len(media_files)
+    total_all = total_processed + total_skipped + total_files_in_queue
+
+    logger.info(
+        f"\n{'=' * 80}\n"
+        f"ФАЙЛЫ НА ОЧЕРЕДИ ({total_files_in_queue} файлов):\n"
+        f"  Всего медиафайлов найдено: {total_all}\n"
+        f"  Уже обработано в сессии: {total_processed}\n"
+        f"  Пропущено (имеют транскрипцию): {total_skipped}\n"
+        f"  На очереди: {total_files_in_queue}\n"
+        f"{'=' * 80}"
+    )
+
+    logger.info("ПЕРВЫЕ ФАЙЛЫ НА ОЧЕРЕДИ:")
+    for i, file_path in enumerate(media_files[:5], 1):
+        try:
             mtime = file_path.stat().st_mtime
             from datetime import datetime
             mtime_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
             logger.info(f"  {i}. {file_path.name} (изменён: {mtime_str})")
-        if len(sorted_files) > 5:
-            logger.info(f"  ... и ещё {len(sorted_files) - 5} файлов")
+        except OSError:
+            logger.info(f"  {i}. {file_path.name} (ошибка доступа к времени модификации)")
 
-    return sorted_files
+    if len(media_files) > 5:
+        logger.info(f"  ... и ещё {len(media_files) - 5} файлов")
+
+
+def count_skipped_files(
+        directory: Path,
+        revision: str,
+        recursive: bool = True
+) -> int:
+    """
+    Подсчитывает количество медиафайлов, которые уже имеют транскрипцию.
+
+    Args:
+        directory: Корневая директория для поиска
+        revision: Ревизия модели (не используется - проверяются все транскрипции)
+        recursive: Рекурсивный обход подпапок (True) или только текущая папка (False)
+
+    Returns:
+        Количество файлов с существующей транскрипцией
+    """
+    skipped = 0
+    search_pattern = directory.rglob('*') if recursive else directory.glob('*')
+
+    for file_path in search_pattern:
+        if not file_path.is_file():
+            continue
+
+        if not is_media_file(file_path):
+            continue
+
+        status = get_transcription_status(file_path, revision)
+        if status == TranscriptionStatus.SUCCESS:
+            skipped += 1
+
+    return skipped
 
 
 def process_single_file(
         file_path: Path,
         revision: str,
         device: str,
-        t_gigaam_script: Path
+        t_gigaam_script: Path,
+        extra_args: List[str] = None
 ) -> bool:
     """
-    Обрабатывает один медиафайл через t_gigaam.py.
+    Обрабатывает один медиафайл через выбранный скрипт транскрибации.
 
     Args:
         file_path: Путь к медиафайлу
         revision: Ревизия модели GigaAM
         device: Устройство (cuda/cpu/auto)
-        t_gigaam_script: Путь к скрипту t_gigaam.py
+        t_gigaam_script: Путь к скрипту транскрибации
+        extra_args: Дополнительные аргументы для передачи в скрипт
 
     Returns:
         True если обработка успешна, False иначе
@@ -202,6 +311,10 @@ def process_single_file(
         "--revision", revision,
         "--device", device
     ]
+
+    # Добавляем дополнительные параметры (например, --num-speakers для speakers)
+    if extra_args:
+        cmd.extend(extra_args)
 
     logger.info(' '.join(f'\"{x}\"' for x in cmd))
 
@@ -226,7 +339,9 @@ def process_directory(
         revision: str,
         device: str,
         skip_existing: bool,
-        t_gigaam_script: Path
+        t_gigaam_script: Path,
+        extra_args: List[str] = None,
+        recursive: bool = True
 ) -> dict:
     """
     Обрабатывает все медиафайлы в директории с динамическим пересканированием.
@@ -241,7 +356,9 @@ def process_directory(
         revision: Ревизия модели
         device: Устройство
         skip_existing: Пропускать существующие транскрипции
-        t_gigaam_script: Путь к скрипту t_gigaam.py
+        t_gigaam_script: Путь к скрипту транскрибации
+        extra_args: Дополнительные аргументы для вложенного скрипта
+        recursive: Рекурсивный обход подпапок или только текущая папка
 
     Returns:
         Словарь со статистикой обработки
@@ -252,10 +369,13 @@ def process_directory(
     # Один файл = одна попытка, независимо от результата
     processed_files = set()
 
+    # Подсчитываем количество пропущенных файлов (с существующей транскрипцией)
+    skipped_files = count_skipped_files(directory, revision, recursive)
+
     # Цикл с динамическим пересканированием
     while True:
         # Пересканируем директорию для поиска необработанных файлов
-        media_files = collect_media_files(directory, skip_existing, revision)
+        media_files = collect_media_files(directory, skip_existing, revision, recursive)
 
         # Фильтруем файлы, которые уже пытались обработать в этой сессии
         media_files = [f for f in media_files if f not in processed_files]
@@ -268,6 +388,9 @@ def process_directory(
                 logger.info("Все файлы обработаны")
             break
 
+        # Выводим информацию о файлах на очереди перед обработкой
+        log_queue_status(media_files, stats["total"], skipped_files)
+
         # Берём ПЕРВЫЙ файл из отсортированного списка (самый свежий)
         file_path = media_files[0]
         stats["total"] += 1
@@ -277,11 +400,11 @@ def process_directory(
 
         logger.info(
             f"\n{'=' * 80}\n"
-            f"[{stats['total']}] Обработка файла (осталось необработанных: {len(media_files)})...\n"
+            f"[{stats['total']}] ОБРАБОТКА ФАЙЛА (осталось в очереди: {len(media_files) - 1})...\n"
             f"{'=' * 80}"
         )
 
-        success = process_single_file(file_path, revision, device, t_gigaam_script)
+        success = process_single_file(file_path, revision, device, t_gigaam_script, extra_args or [])
 
         if success:
             stats["success"] += 1
@@ -325,8 +448,24 @@ def main():
         default="t_gigaam_simple.py",
         help="Имя скрипта для транскрибации (по умолчанию: t_gigaam_simple.py)"
     )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        default=True,
+        help="Рекурсивный обход подпапок (по умолчанию: включено)"
+    )
+    parser.add_argument(
+        "--no-recursive",
+        dest="recursive",
+        action="store_false",
+        help="Не искать файлы в подпапках (только в текущей директории)"
+    )
 
-    args = parser.parse_args()
+    # Используем parse_known_args() для захвата всех остальных аргументов
+    args, extra_args = parser.parse_known_args()
+    
+    # Сохраняем extra_args в args для удобства
+    args.extra_args = extra_args
 
     # Проверка директории
     directory = Path(args.directory).expanduser().resolve()
@@ -355,7 +494,14 @@ def main():
         f"  Ревизия: {args.revision}\n"
         f"  Устройство: {args.device}\n"
         f"  Пропускать существующие: {not args.force}\n"
-        f"{'=' * 80}"
+        f"  Рекурсивный обход: {'ДА' if args.recursive else 'НЕТ'}\n"
+        + (f"  Доп. параметры для скрипта: {' '.join(args.extra_args)}\n" if args.extra_args else "")
+        + f"{'=' * 80}"
+    )
+
+    logger.info(
+        f"\nСканирование директории: {directory}\n"
+        f"  Рекурсивный обход: {'ДА (все подпапки)' if args.recursive else 'НЕТ (только текущая папка)'}"
     )
 
     try:
@@ -364,7 +510,9 @@ def main():
             args.revision,
             args.device,
             skip_existing=not args.force,
-            t_gigaam_script=t_gigaam_script
+            t_gigaam_script=t_gigaam_script,
+            extra_args=args.extra_args,
+            recursive=args.recursive
         )
 
         # Итоговая статистика
@@ -373,7 +521,7 @@ def main():
             logger.info(
                 f"\n{'=' * 80}\n"
                 f"ИТОГОВАЯ СТАТИСТИКА:\n"
-                f"  Всего файлов: {stats['total']}\n"
+                f"  Обработано в этой сессии: {stats['total']}\n"
                 f"  Успешно: {stats['success']}\n"
                 f"  Ошибок: {stats['failed']}\n"
                 f"  Процент успеха: {success_percent:.1f}%\n"
@@ -383,8 +531,8 @@ def main():
             logger.info(
                 f"\n{'=' * 80}\n"
                 f"ИТОГОВАЯ СТАТИСТИКА:\n"
-                f"  Всего файлов: 0\n"
-                f"  Файлы не были обработаны\n"
+                f"  Обработано в этой сессии: 0\n"
+                f"  Новых файлов для обработки не найдено\n"
                 f"{'=' * 80}"
             )
 

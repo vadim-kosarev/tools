@@ -151,6 +151,19 @@ class PromptLoader:
         """Retry prompt для refine node."""
         return self.render('refine/retry.md', state, extra)
 
+    # REFINER NODE (новые)
+    def render_refiner_system(self, state: Dict[str, Any]) -> str:
+        """System prompt для refiner node."""
+        return self.render('refiner/system.md', state)
+
+    def render_refiner_user(self, state: Dict[str, Any]) -> str:
+        """User prompt для refiner node."""
+        return self.render('refiner/user.md', state)
+
+    def render_refiner_retry(self, state: Dict[str, Any], extra: Dict[str, Any] = None) -> str:
+        """Retry prompt для refiner node."""
+        return self.render('refiner/retry.md', state, extra)
+
     # FINAL NODE
     def render_final_system(self, state: Dict[str, Any]) -> str:
         """System prompt для final node."""

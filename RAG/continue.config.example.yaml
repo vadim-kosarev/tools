@@ -1,0 +1,29 @@
+## Continue.dev config.yaml — пример для MCP сервера kb-tools
+## Скопируйте в ~/.continue/config.yaml
+
+# ── Continue.dev >= 0.9 (новый формат) ──────────────────────────────
+name: KB Tools MCP
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: kb-tools
+    command: C:/dev/github.com/vadim-kosarev/tools.0/RAG/kb_tools_mcp_stdio.bat
+    args: []
+    env: {}
+
+# ── Альтернатива: напрямую через Python (если venv уже активирован) ──
+#
+# mcpServers:
+#   - name: kb-tools
+#     command: C:/dev/github.com/vadim-kosarev/tools.0/.venv/Scripts/python.exe
+#     args:
+#       - C:/dev/github.com/vadim-kosarev/tools.0/RAG/kb_tools_mcp_stdio.py
+#     env: {}
+
+# ── Альтернатива: SSE транспорт (если запущен kb_tools_mcp_http.py) ─────────
+#
+# mcpServers:
+#   - name: kb-tools
+#     transport:
+#       type: sse
+#       url: http://localhost:8000/sse

@@ -150,7 +150,8 @@ class LlmCallLogger:
         log_dir: Path = _DEFAULT_LOG_DIR,
         stream_to_console: bool = True,
         separate_files: bool = True,
-        state_callback: Any = None
+        state_callback: Any = None,
+        node_numbers: dict[str, str] | None = None  # Маппинг node_name → номер (001, 002, etc.)
     ) -> None:
         self._enabled = enabled
         self._log_dir = log_dir
@@ -159,6 +160,9 @@ class LlmCallLogger:
         self._counter = 0
         self._lock    = threading.Lock()
         self._state_callback = state_callback
+        self._node_numbers = node_numbers or {}
+        self._current_node = None  # Текущий узел (для префикса в именах файлов)
+        self._current_node_counter = 0  # Счетчик внутри узла
 
         if enabled:
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +171,27 @@ class LlmCallLogger:
         with self._lock:
             self._counter += 1
             return self._counter
+
+    def set_current_node(self, node_name: str) -> None:
+        """Устанавливает текущий узел для логирования.
+        
+        Args:
+            node_name: Имя узла (planner, tool_selector, tool_executor, analyzer, refiner, final)
+        """
+        with self._lock:
+            self._current_node = node_name
+            self._current_node_counter = 0  # Сбрасываем счетчик внутри узла
+
+    def _next_node_number(self) -> tuple[str, int]:
+        """Возвращает (node_prefix, counter) для текущего узла.
+        
+        Returns:
+            Tuple (node_prefix, counter), например ("001", 1) для первого вызова в planner
+        """
+        with self._lock:
+            node_prefix = self._node_numbers.get(self._current_node, "999") if self._current_node else "000"
+            self._current_node_counter += 1
+            return node_prefix, self._current_node_counter
 
     def _write(self, number: int, step: str, kind: str, text: str) -> None:
         """Append one block to the log file and flush immediately.
@@ -177,7 +202,7 @@ class LlmCallLogger:
           - EVENT             -> ___ border (reuses log_stage format)
 
         If separate_files=True, writes to individual numbered files:
-          001_llm_request.log, 002_llm_response.log, 003_tool_request.log, etc.
+          001_planner_001_llm_request.log, 001_planner_002_llm_response.log, etc.
         """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         is_tool  = step.startswith("TOOL:") or step.startswith("DB:")
@@ -203,7 +228,10 @@ class LlmCallLogger:
 
         with self._lock:
             if self._separate_files and not is_event:
-                # Пишем в отдельный файл с номером
+                # Получаем префикс узла и счетчик
+                node_prefix, node_counter = self._next_node_number()
+                
+                # Пишем в отдельный файл с префиксом узла
                 kind_lower = kind.lower()
                 tool_name = step.replace("TOOL:", "").replace("DB:", "") if is_tool else step.lower()
 
@@ -212,11 +240,12 @@ class LlmCallLogger:
                 tool_name = tool_name.replace(":", "_")
                 step_clean = step.lower().replace(":", "_")
 
-                # Формируем имя файла: 001_llm_request.log, 002_tool_exact_search_response.log
+                # Формируем имя файла: 001_planner_001_llm_request.log
+                node_name = self._current_node or "unknown"
                 if is_tool:
-                    filename = f"{number:03d}_tool_{tool_name}_{kind_lower}.log"
+                    filename = f"{node_prefix}_{node_name}_{node_counter:03d}_tool_{tool_name}_{kind_lower}.log"
                 else:
-                    filename = f"{number:03d}_llm_{step_clean}_{kind_lower}.log"
+                    filename = f"{node_prefix}_{node_name}_{node_counter:03d}_llm_{step_clean}_{kind_lower}.log"
 
                 path = self._log_dir / filename
                 with path.open("w", encoding="utf-8") as f:
@@ -254,10 +283,14 @@ class LlmCallLogger:
 
         with self._lock:
             if self._separate_files:
-                # Пишем в отдельный файл
+                # Получаем префикс узла и счетчик
+                node_prefix, node_counter = self._next_node_number()
+                
+                # Пишем в отдельный файл с префиксом узла
                 # Заменяем недопустимые символы в именах файлов (для Windows)
                 step_clean = step.lower().replace(":", "_")
-                filename = f"{number:03d}_llm_{step_clean}_response.log"
+                node_name = self._current_node or "unknown"
+                filename = f"{node_prefix}_{node_name}_{node_counter:03d}_llm_{step_clean}_response.log"
                 path = self._log_dir / filename
                 with path.open("w", encoding="utf-8") as f:
                     f.write(block)

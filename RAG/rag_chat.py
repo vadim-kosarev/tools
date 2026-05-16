@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     enrich_after_chars: int = 1500         # max chars of following context per anchor
     enrich_candidates: int = 30            # max ClickHouse rows to fetch per direction
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

@@ -242,6 +242,12 @@ def get_refine_schema() -> str:
     return generate_schema_for_prompt(AgentRefine)
 
 
+def get_refiner_schema() -> str:
+    """JSON schema для refiner ноды (v4 итеративная архитектура)."""
+    from rag_lg_agent import AgentRefiner
+    return generate_schema_for_prompt(AgentRefiner)
+
+
 def get_final_schema() -> str:
     """JSON schema для final ноды."""
     from rag_lg_agent import AgentFinal

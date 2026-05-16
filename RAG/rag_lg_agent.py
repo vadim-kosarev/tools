@@ -1,24 +1,32 @@
 """
-LangGraph RAG-агент — рефакторинг v3.
+LangGraph RAG-агент — рефакторинг v4 (итеративный).
 
-АРХИТЕКТУРА (простая линейная цепочка):
-    START → planner → tool_selector → tool_executor → analyzer → refiner → final → END
+АРХИТЕКТУРА (итеративная с циклом):
+    START → planner → tool_selector → tool_executor → analyzer → refiner
+                           ↑                                        ↓
+                           +----------------[продолжить]-------------+
+                                                                     ↓
+                                                                [завершено]
+                                                                     ↓
+                                                                  final → END
 
 Узлы:
-  planner       - строит текстовый план поиска (LLM, Russian)
-  tool_selector - выбирает инструменты и формирует инструкции (LLM → JSON)
-  tool_executor - выполняет инструменты, сохраняет результаты только в history, без LLM
+  planner       - строит текстовый план поиска (LLM, Russian), инициализирует current_step_index=0, iteration=1
+  tool_selector - выбирает инструменты для текущего шага плана (LLM → JSON)
+  tool_executor - выполняет инструменты, сохраняет результаты в history, без LLM
   analyzer      - анализирует результаты из history и добавляет в context после фильтрации, без LLM
-  refiner       - решает следующий шаг (без LLM, всегда → final)
+  refiner       - проверяет выполнен ли текущий шаг, инкрементирует current_step_index, решает продолжить или завершить (LLM)
   final         - строит ответ по накопленному контексту (LLM)
 
 AgentState (TypedDict для совместимости с LangGraph):
   user_query          : str            — запрос пользователя
   plan                : list[str]      — список шагов плана (от planner)
+  current_step_index  : int            — текущий выполняемый шаг плана (0-based)
+  iteration           : int            — номер итерации (1-based, макс MAX_ITERATIONS)
   tool_instructions   : list[dict]     — [{tool, input}] (от tool_selector)
   context             : list[dict]     — проанализированные результаты тулов (от analyzer)
   history             : list[dict]     — структурированная история (HistoryEntry dicts)
-  next_node           : str            — от refiner (всегда "final")
+  next_node           : str            — от refiner: "tool_selector" (продолжить) или "final" (завершить)
   final_answer        : str            — итоговый ответ JSON (от final)
 
 История (HistoryEntry) — Pydantic-объекты, сохраняемые как dict через .model_dump():
@@ -52,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -78,6 +87,7 @@ from prompt_loader import get_loader
 from schema_generator import (
     get_plan_schema,
     get_action_schema,
+    get_refiner_schema,
     get_final_schema,
 )
 from logging_config import setup_logging
@@ -92,8 +102,18 @@ _prompt_loader = get_loader()
 # Константы
 # ---------------------------------------------------------------------------
 
-MAX_ITERATIONS = 1   # В новой линейной архитектуре — 1 проход
+MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "3"))  # Максимальное количество итераций через tool_selector
 AUTO_EXPAND_CONTEXT = True
+
+# Нумерация узлов графа для логирования
+NODE_NUMBERS = {
+    "planner": "001",
+    "tool_selector": "002",
+    "tool_executor": "003",
+    "analyzer": "004",
+    "refiner": "005",
+    "final": "006",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -168,18 +188,26 @@ def _save_agent_state(state: AgentState, node_name: str, llm_logger: LlmCallLogg
     """
     Сохраняет текущее состояние агента в .json файл в logs/.
     
-    Имя файла: {counter:03d}_agent_state_{node_name}.json
-    где counter берётся из llm_logger для синхронизации с request/response файлами.
+    Имя файла: {node_number}_{node_name}_state.json
+    где node_number - фиксированный номер узла из NODE_NUMBERS (001-006).
+    
+    Для итеративных узлов (tool_selector, tool_executor, analyzer, refiner) 
+    добавляется номер итерации: {node_number}_{node_name}_iter{N}_state.json
     """
     if not llm_logger._enabled:
         return
     
     try:
-        # Получаем текущий счётчик (последний использованный номер)
-        with llm_logger._lock:
-            counter = llm_logger._counter
+        # Получаем номер узла
+        node_number = NODE_NUMBERS.get(node_name, "999")
         
-        filename = f"{counter:03d}_agent_state_{node_name}.json"
+        # Для итеративных узлов добавляем номер итерации
+        iteration = state.get("iteration", 0)
+        if node_name in ("tool_selector", "tool_executor", "analyzer", "refiner") and iteration > 0:
+            filename = f"{node_number}_{node_name}_iter{iteration}_state.json"
+        else:
+            filename = f"{node_number}_{node_name}_state.json"
+        
         filepath = llm_logger._log_dir / filename
         
         # Конвертируем state в JSON-сериализуемый формат
@@ -236,10 +264,14 @@ class AgentState(TypedDict, total=False):
     """Состояние агента. Поля заполняются последовательно по цепочке узлов."""
     user_query: str                    # вход: запрос пользователя
     plan: list[str]                    # planner → список шагов
+    current_step_index: int            # текущий выполняемый шаг плана (0-based)
+    completed_steps: list[int]         # список индексов завершенных шагов плана (0-based)
+    executing_steps: list[int]         # список индексов шагов, выполняемых в текущей итерации (0-based)
+    iteration: int                     # номер итерации (1-based)
     tool_instructions: list[dict]      # tool_selector → [{tool, input}]
     context: list[dict]                # tool_executor → [{tool, input, result, result_md}]
     history: list[dict]                # HistoryEntry.model_dump() — хронология
-    next_node: str                     # refiner → "final" (всегда)
+    next_node: str                     # refiner → "tool_selector" или "final"
     final_answer: str                  # final → JSON строка
 
 
@@ -267,6 +299,9 @@ class AgentAction(BaseModel):
     step: int = Field(description="Номер шага")
     thought: str = Field(description="Краткое рассуждение")
     actions: list[ToolAction] = Field(description="Список вызовов инструментов")
+    plan_steps: list[int] = Field(
+        description="Индексы шагов плана (0-based), которые покрываются этими инструментами. Например: [0, 1] если выполняются шаги 1 и 2"
+    )
 
 
 class FinalAnswerData(BaseModel):
@@ -290,6 +325,19 @@ class FinalAnswer(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     recommendations: list[RecommendedSection] = Field(default_factory=list)
     self_assessment: str = Field(description="Самооценка агента")
+
+
+class AgentRefiner(BaseModel):
+    """Ответ refiner-узла."""
+    status: Literal["refiner"] = Field(default="refiner")
+    step: int = Field(description="Номер шага")
+    thought: str = Field(description="Анализ выполнения текущего шага плана")
+    current_step_completed: bool = Field(description="Выполнен ли текущий шаг плана")
+    all_plan_completed: bool = Field(description="Выполнены ли все шаги плана")
+    next_action: Literal["continue", "final"] = Field(
+        description="continue - продолжить выполнение плана (следующий шаг), final - перейти к формированию ответа"
+    )
+    reason: str = Field(description="Обоснование решения о следующем действии")
 
 
 class AgentFinal(BaseModel):
@@ -323,6 +371,7 @@ def _get_llm_logger() -> LlmCallLogger:
             log_dir=Path(__file__).parent / "logs",
             stream_to_console=True,
             state_callback=_get_current_state,  # Callback для получения текущего state
+            node_numbers=NODE_NUMBERS,  # Передаем маппинг номеров узлов
         )
     return _llm_logger
 
@@ -398,6 +447,17 @@ def _get_system_prompt() -> str:
 def _fix_tool_args(tool_name: str, tool_input: dict) -> dict:
     """Исправляет типичные ошибки LLM при именовании параметров."""
     fixed = tool_input.copy()
+    
+    # semantic_search: принимает 'query', но если передан 'substring', конвертируем
+    if tool_name == "semantic_search":
+        if "substring" in fixed and "query" not in fixed:
+            fixed["query"] = fixed.pop("substring")
+    
+    # exact_search: принимает 'substring', но если передан 'query', конвертируем
+    if tool_name == "exact_search":
+        if "query" in fixed and "substring" not in fixed:
+            fixed["substring"] = fixed.pop("query")
+    
     if tool_name == "find_sections_by_term":
         if "term" in fixed and "substring" not in fixed:
             fixed["substring"] = fixed.pop("term")
@@ -495,6 +555,7 @@ def planner_node(state: AgentState) -> AgentState:
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
     llm_logger = _get_llm_logger()
+    llm_logger.set_current_node("planner")  # Устанавливаем текущий узел
     user_query = state["user_query"]
     llm_logger.log_stage("PLANNER START", f"Вопрос: {user_query}")
 
@@ -543,6 +604,9 @@ def planner_node(state: AgentState) -> AgentState:
         logger.info(f"Planner: {len(result.plan)} шагов")
 
         state["plan"] = result.plan
+        state["current_step_index"] = 0  # Начинаем с первого шага
+        state["completed_steps"] = []    # Пока ничего не выполнено
+        state["iteration"] = 1           # Первая итерация
         state["history"] = history
         _save_agent_state(state, "planner", llm_logger)
         return state
@@ -554,12 +618,27 @@ def planner_node(state: AgentState) -> AgentState:
 
 
 def tool_selector_node(state: AgentState) -> AgentState:
-    """На основе плана выбирает инструменты и формирует JSON-инструкции."""
+    """На основе плана выбирает инструменты для одного или нескольких шагов подряд."""
     global _current_agent_state
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
     llm_logger = _get_llm_logger()
-    llm_logger.log_stage("TOOL_SELECTOR START", f"Plan: {state.get('plan', [])}")
+    llm_logger.set_current_node("tool_selector")  # Устанавливаем текущий узел
+    
+    current_step_index = state.get("current_step_index", 0)
+    plan = state.get("plan", [])
+    completed_steps = state.get("completed_steps", [])
+    
+    # Определяем доступные шаги (еще не выполненные)
+    available_steps = [i for i in range(len(plan)) if i not in completed_steps]
+    
+    llm_logger.log_stage(
+        "TOOL_SELECTOR START", 
+        f"Plan: {plan}\n"
+        f"Current step index: {current_step_index}\n"
+        f"Completed steps: {completed_steps}\n"
+        f"Available steps: {available_steps}"
+    )
 
     try:
         llm = rag_chat.build_llm()
@@ -567,7 +646,10 @@ def tool_selector_node(state: AgentState) -> AgentState:
 
         render_ctx = {
             "user_query": state["user_query"],
-            "plan": state.get("plan", []),
+            "plan": plan,
+            "current_step_index": current_step_index,
+            "completed_steps": completed_steps,
+            "available_steps": available_steps,
             "all_tool_results": state.get("context", []),
             "system_prompt": _get_system_prompt(),
             "available_tools": _get_available_tools(),
@@ -593,19 +675,28 @@ def tool_selector_node(state: AgentState) -> AgentState:
         )
 
         tool_instructions = [{"tool": a.tool, "input": a.input} for a in result.actions]
+        executing_steps = result.plan_steps  # Какие шаги плана выполняем в этой итерации
 
         history.append(HistoryLLMReply(
             node="tool_selector", content=pydantic_to_markdown(result)
         ).model_dump())
 
+        # Формируем красивое сообщение о выполняемых шагах
+        steps_msg = ", ".join(f"#{i+1}: {plan[i]}" for i in executing_steps if i < len(plan))
+        
         llm_logger.log_stage(
             "TOOL_SELECTOR COMPLETE",
-            f"Thought: {result.thought}\n" +
+            f"Thought: {result.thought}\n"
+            f"Executing plan steps: {steps_msg}\n"
+            f"Actions:\n" +
             "\n".join(f"  - {a.tool}({json.dumps(a.input, ensure_ascii=False)})" for a in result.actions)
         )
-        logger.info(f"ToolSelector: выбрано {len(tool_instructions)} инструментов")
+        logger.info(
+            f"ToolSelector: {len(tool_instructions)} инструментов для шагов {executing_steps}"
+        )
 
         state["tool_instructions"] = tool_instructions
+        state["executing_steps"] = executing_steps
         state["history"] = history
         _save_agent_state(state, "tool_selector", llm_logger)
         return state
@@ -622,6 +713,7 @@ def tool_executor_node(state: AgentState) -> AgentState:
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
     llm_logger = _get_llm_logger()
+    llm_logger.set_current_node("tool_executor")  # Устанавливаем текущий узел
     instructions = state.get("tool_instructions", [])
     llm_logger.log_stage("TOOL_EXECUTOR START", f"Инструментов: {len(instructions)}")
 
@@ -720,19 +812,89 @@ def tool_executor_node(state: AgentState) -> AgentState:
         raise
 
 
+def _deduplicate_chunks_by_id(context: list[dict]) -> list[dict]:
+    """
+    Дедуплицирует чанки по chunk_id в результатах всех инструментов.
+
+    Просматривает все результаты типа SearchChunksResult в context
+    и удаляет дубликаты по metadata.chunk_id, оставляя первое вхождение
+    (с лучшим score, если есть).
+
+    Args:
+        context: список результатов инструментов
+
+    Returns:
+        список результатов с дедуплицированными чанками
+    """
+    seen_ids: set[str] = set()
+    deduped_context = []
+
+    for entry in context:
+        result = entry.get("result")
+
+        # Пропускаем ошибки и не-SearchChunksResult
+        if not isinstance(result, dict) or "chunks" not in result:
+            deduped_context.append(entry)
+            continue
+
+        chunks = result.get("chunks", [])
+        if not chunks:
+            deduped_context.append(entry)
+            continue
+
+        # Дедупликация чанков по chunk_id
+        unique_chunks = []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                unique_chunks.append(chunk)
+                continue
+
+            metadata = chunk.get("metadata", {})
+            chunk_id = metadata.get("chunk_id") if isinstance(metadata, dict) else None
+
+            if chunk_id and chunk_id not in seen_ids:
+                seen_ids.add(chunk_id)
+                unique_chunks.append(chunk)
+            elif not chunk_id:
+                # Если нет chunk_id, оставляем чанк как есть
+                unique_chunks.append(chunk)
+
+        # Обновляем результат с дедуплицированными чанками
+        if len(unique_chunks) < len(chunks):
+            # Создаём новый entry с дедуплицированными чанками
+            deduped_result = result.copy()
+            deduped_result["chunks"] = unique_chunks
+            deduped_result["total_found"] = len(unique_chunks)
+
+            deduped_entry = entry.copy()
+            deduped_entry["result"] = deduped_result
+
+            # Обновляем result_md если есть
+            if "result_md" in entry:
+                # Пересоздаём markdown с новыми данными
+                result_dict = {"tool": entry["tool"], "input": entry["input"], "result": deduped_result}
+                deduped_entry["result_md"] = dict_to_markdown(result_dict, title=f"Tool: {entry['tool']}")
+
+            deduped_context.append(deduped_entry)
+        else:
+            deduped_context.append(entry)
+
+    return deduped_context
+
+
 def analyzer_node(state: AgentState) -> AgentState:
     """Анализирует результаты инструментов из history и добавляет их в context. Без LLM."""
     global _current_agent_state
     _current_agent_state = dict(state)  # Обновляем глобальный state
     
     llm_logger = _get_llm_logger()
+    llm_logger.set_current_node("analyzer")  # Устанавливаем текущий узел
 
     # Извлекаем результаты tool execution из history
     history = list(state.get("history", []))
     tool_executions = [h for h in history if h.get("type") == "tool_execution"]
 
     # Собираем context из tool execution записей
-    # TODO: здесь в будущем можно добавить логику фильтрации/анализа того, что добавлять
     context = []
     for te in tool_executions:
         # Восстанавливаем формат context из HistoryToolExecution
@@ -744,7 +906,27 @@ def analyzer_node(state: AgentState) -> AgentState:
             "result_md": te["result_md"]
         })
 
-    llm_logger.log_stage("ANALYZER START", f"Элементов для анализа: {len(context)}")
+    # Дедупликация чанков по chunk_id
+    context_before_dedup = len(context)
+    chunks_before = sum(
+        len(e.get("result", {}).get("chunks", [])) 
+        for e in context 
+        if isinstance(e.get("result"), dict) and "chunks" in e["result"]
+    )
+    
+    context = _deduplicate_chunks_by_id(context)
+    
+    chunks_after = sum(
+        len(e.get("result", {}).get("chunks", [])) 
+        for e in context 
+        if isinstance(e.get("result"), dict) and "chunks" in e["result"]
+    )
+    
+    dedup_stats = f"Дедупликация: {chunks_before} → {chunks_after} чанков ({chunks_before - chunks_after} дубликатов удалено)"
+
+    llm_logger.log_stage("ANALYZER START", 
+        f"Элементов для анализа: {len(context)}\n{dedup_stats}"
+    )
 
     ok     = [e for e in context if not str(e.get("result_md", "")).startswith("ERROR")]
     errors = [e for e in context if str(e.get("result_md", "")).startswith("ERROR")]
@@ -752,6 +934,7 @@ def analyzer_node(state: AgentState) -> AgentState:
 
     lines = [
         f"Выполнено инструментов: {len(context)} (успешно: {len(ok)}, ошибок: {len(errors)})",
+        dedup_stats,
         f"Суммарный объём данных: {total_chars} символов",
     ]
     if ok:
@@ -767,7 +950,10 @@ def analyzer_node(state: AgentState) -> AgentState:
     history.append(HistoryToolSummary(tool_count=len(context), content=summary).model_dump())
 
     llm_logger.log_stage("ANALYZER COMPLETE", summary)
-    logger.info(f"Analyzer: {len(ok)} успешных, {len(errors)} ошибок, {total_chars} символов")
+    logger.info(
+        f"Analyzer: {len(ok)} успешных, {len(errors)} ошибок, {total_chars} символов. "
+        f"Дедупликация: {chunks_before} → {chunks_after} чанков"
+    )
 
     # ТЕПЕРЬ сохраняем проанализированный context в state
     state["context"] = context
@@ -779,25 +965,150 @@ def analyzer_node(state: AgentState) -> AgentState:
 
 
 def refiner_node(state: AgentState) -> AgentState:
-    """Всегда идёт в final. Без LLM — простота и надёжность."""
+    """
+    Анализирует выполнение шагов плана и принимает решение:
+    - Если executing_steps выполнены и есть еще шаги → добавляет их в completed_steps, next_node="tool_selector"
+    - Если все шаги выполнены или достигнут лимит итераций → next_node="final"
+    
+    Использует LLM для анализа.
+    """
     global _current_agent_state
     _current_agent_state = dict(state)  # Обновляем глобальный state
 
     llm_logger = _get_llm_logger()
-
-    history = list(state.get("history", []))
-    history.append(HistoryRefinerSummary(
-        decision="final",
-        content=f"Данные собраны ({len(state.get('context', []))} результатов). Переходим к формированию ответа."
-    ).model_dump())
-
-    llm_logger.log_stage("REFINER", "Решение: → final (always)")
-
-    state["next_node"] = "final"
-    state["history"] = history
+    llm_logger.set_current_node("refiner")  # Устанавливаем текущий узел
     
-    _save_agent_state(state, "refiner", llm_logger)
-    return state
+    current_step_index = state.get("current_step_index", 0)
+    iteration = state.get("iteration", 1)
+    plan = state.get("plan", [])
+    context = state.get("context", [])
+    executing_steps = state.get("executing_steps", [current_step_index])
+    completed_steps = list(state.get("completed_steps", []))
+    
+    # Формируем текст выполняемых шагов
+    executing_steps_text = ", ".join(f"#{i+1}: {plan[i]}" for i in executing_steps if i < len(plan))
+    completed_steps_text = ", ".join(f"#{i+1}" for i in completed_steps)
+    
+    llm_logger.log_stage("REFINER START", 
+        f"Итерация: {iteration}/{MAX_ITERATIONS}\n"
+        f"Выполняемые шаги: {executing_steps_text}\n"
+        f"Завершенные шаги: {completed_steps_text}\n"
+        f"Собрано результатов: {len(context)}"
+    )
+
+    try:
+        llm = rag_chat.build_llm()
+        structured_llm = llm.with_structured_output(AgentRefiner)
+
+        # Для refiner промпта подготовим контекст
+        tool_summaries = [h for h in state.get("history", []) if h.get("type") == "tool_summary"]
+        observation = tool_summaries[-1]["content"] if tool_summaries else "Результаты инструментов собраны."
+
+        render_ctx = {
+            "user_query": state["user_query"],
+            "plan": plan,
+            "executing_steps": executing_steps,
+            "executing_steps_text": executing_steps_text,
+            "completed_steps": completed_steps,
+            "completed_steps_text": completed_steps_text,
+            "current_step_index": current_step_index,
+            "current_step": plan[current_step_index] if current_step_index < len(plan) else "нет шага",
+            "iteration": iteration,
+            "MAX_ITERATIONS": MAX_ITERATIONS,
+            "observation": observation,
+            "total_results": len(context),
+            "system_prompt": _get_system_prompt(),
+            "available_tools": _get_available_tools(),
+            "schema_AgentRefiner": get_refiner_schema(),
+        }
+        
+        system_msg = _prompt_loader.render_refiner_system(render_ctx)
+        user_msg = _prompt_loader.render_refiner_user(render_ctx)
+
+        invoke_config = {}
+        if llm_logger._enabled:
+            invoke_config = {"callbacks": [LangChainFileLogger(llm_logger, step_prefix="REFINER")]}
+
+        history = list(state.get("history", []))
+        messages = _build_messages_from_history(system_msg, history)
+        messages.append({"role": "user", "content": user_msg})
+
+        result: AgentRefiner = _invoke_llm_with_retry(
+            structured_llm, messages, "refiner", llm_logger,
+            retry_render_fn=lambda raw: _prompt_loader.render_refiner_retry(
+                render_ctx, extra={"error_message": raw}
+            ),
+            invoke_config=invoke_config,
+        )
+
+        history.append(HistoryLLMReply(
+            node="refiner", content=pydantic_to_markdown(result)
+        ).model_dump())
+
+        # Принимаем решение на основе ответа LLM
+        if result.next_action == "continue" and iteration < MAX_ITERATIONS:
+            # Если текущие шаги выполнены, добавляем их в completed_steps
+            if result.current_step_completed:
+                for step_idx in executing_steps:
+                    if step_idx not in completed_steps:
+                        completed_steps.append(step_idx)
+                completed_steps.sort()
+            
+            # Находим следующий невыполненный шаг
+            next_step_index = next((i for i in range(len(plan)) if i not in completed_steps), len(plan))
+            
+            # Проверяем что не вышли за границы плана
+            if next_step_index >= len(plan):
+                decision = "final"
+                reason = "Все шаги плана выполнены"
+            else:
+                decision = "tool_selector"
+                remain_count = len(plan) - len(completed_steps)
+                reason = f"Переход к шагу #{next_step_index + 1}: {plan[next_step_index]} ({remain_count} шагов осталось)"
+            
+            state["current_step_index"] = next_step_index
+            state["completed_steps"] = completed_steps
+            state["iteration"] = iteration + 1
+        else:
+            # Завершаем
+            decision = "final"
+            if iteration >= MAX_ITERATIONS:
+                reason = f"Достигнут лимит итераций ({MAX_ITERATIONS})"
+            else:
+                reason = result.reason
+
+        history.append(HistoryRefinerSummary(
+            decision=decision,
+            content=f"{reason}\n"
+                    f"Выполняемые шаги выполнены: {'да' if result.current_step_completed else 'нет'}\n"
+                    f"Все шаги выполнены: {'да' if result.all_plan_completed else 'нет'}\n"
+                    f"Завершено шагов: {len(completed_steps)}/{len(plan)}"
+        ).model_dump())
+
+        llm_logger.log_stage(
+            "REFINER COMPLETE",
+            f"Решение: → {decision}\n"
+            f"Причина: {reason}\n"
+            f"Итерация: {state.get('iteration', iteration)}\n"
+            f"Завершено шагов: {len(completed_steps)}/{len(plan)}"
+        )
+        logger.info(
+            f"Refiner: {decision} (iteration={state.get('iteration', iteration)}, "
+            f"completed={len(completed_steps)}/{len(plan)})"
+        )
+
+        state["next_node"] = decision
+        state["history"] = history
+        
+        _save_agent_state(state, "refiner", llm_logger)
+        return state
+
+    except Exception as exc:
+        llm_logger.log_stage("REFINER ERROR", f"Ошибка: {exc}\n\n{traceback.format_exc()}")
+        logger.error(f"Ошибка refiner_node: {exc}", exc_info=True)
+        # При ошибке всё равно завершаем
+        state["next_node"] = "final"
+        return state
 
 
 def final_node(state: AgentState) -> AgentState:
@@ -806,6 +1117,7 @@ def final_node(state: AgentState) -> AgentState:
     _current_agent_state = dict(state)  # Обновляем глобальный state
 
     llm_logger = _get_llm_logger()
+    llm_logger.set_current_node("final")  # Устанавливаем текущий узел
     context = state.get("context", [])
     llm_logger.log_stage("FINAL START", f"Контекст: {len(context)} результатов")
 
@@ -886,8 +1198,14 @@ def final_node(state: AgentState) -> AgentState:
 
 def build_graph() -> Any:
     """
-    Линейный граф без условных ветвлений:
-    planner → tool_selector → tool_executor → analyzer → refiner → final
+    Итеративный граф с условным роутингом:
+    planner → tool_selector → tool_executor → analyzer → refiner
+                    ↑                                       ↓
+                    +------------- (continue) --------------+
+                                                            ↓
+                                                        (final)
+                                                            ↓
+                                                         final → END
     """
     workflow = StateGraph(AgentState)
 
@@ -898,12 +1216,28 @@ def build_graph() -> Any:
     workflow.add_node("refiner",       refiner_node)
     workflow.add_node("final",         final_node)
 
+    # Функция для условного роутинга от refiner
+    def route_from_refiner(state: AgentState) -> str:
+        """Определяет следующий узел на основе решения refiner."""
+        next_node = state.get("next_node", "final")
+        return next_node
+
     workflow.set_entry_point("planner")
     workflow.add_edge("planner",       "tool_selector")
     workflow.add_edge("tool_selector", "tool_executor")
     workflow.add_edge("tool_executor", "analyzer")
     workflow.add_edge("analyzer",      "refiner")
-    workflow.add_edge("refiner",       "final")
+    
+    # Условный роутинг от refiner
+    workflow.add_conditional_edges(
+        "refiner",
+        route_from_refiner,
+        {
+            "tool_selector": "tool_selector",  # Цикл обратно к выбору инструментов
+            "final": "final"                   # Переход к финальному ответу
+        }
+    )
+    
     workflow.add_edge("final",         END)
 
     return workflow.compile()
@@ -915,16 +1249,18 @@ def build_graph() -> Any:
 
 def run_query(question: str, verbose: bool = False, max_steps: int = None) -> dict:
     llm_logger = _get_llm_logger()
-    llm_logger.log_stage("QUERY START", f"Вопрос: {question}\nMode: {'verbose' if verbose else 'normal'}")
+    llm_logger.log_stage("QUERY START", f"Вопрос: {question}\nMode: {'verbose' if verbose else 'normal'}\nМакс итераций: {MAX_ITERATIONS}")
 
     graph = build_graph()
     initial_state: AgentState = {
         "user_query": question,
         "plan": [],
+        "current_step_index": 0,
+        "iteration": 1,
         "tool_instructions": [],
         "context": [],
         "history": [],
-        "next_node": "final",
+        "next_node": "tool_selector",
         "final_answer": "",
     }
 
