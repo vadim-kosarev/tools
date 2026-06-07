@@ -1,4 +1,4 @@
-# 🚀 Быстрый старт MCP Server
+# Быстрый старт MCP Server
 
 ## Установка
 
@@ -9,7 +9,7 @@ pip install -r requirements_mcp.txt
 
 ---
 
-## ⚙️ Конфиг Continue.dev (`~/.continue/config.yaml`)
+## Конфиг Continue.dev (`~/.continue/config.yaml`)
 
 ### Способ 1: stdio транспорт (рекомендуется — без отдельного сервера)
 
@@ -65,12 +65,12 @@ mcpServers:
 
 ---
 
-## 📁 Файлы MCP сервера
+## Файлы MCP сервера
 
 | Файл | Назначение |
 |------|-----------|
 | `kb_tools_mcp_stdio.py` | stdio транспорт (для Continue.dev `command`) |
-| `kb_tools_mcp_stdio.bat` | bat-обёртка для запуска kb_tools_mcp_stdio.py с venv |
+| `kb_tools_mcp_stdio.bat` | bat-обёртка для запуска с venv |
 | `kb_tools_mcp_http.py` | Streamable HTTP транспорт (официальный MCP SDK) |
 | `start_kb_tools_mcp_http.ps1` | запуск HTTP сервера через uv |
 | `continue.config.example.yaml` | готовый конфиг с вариантами |
@@ -89,10 +89,8 @@ echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python kb_tools_mcp_stdi
 
 ---
 
-## Документация
+## Ссылки
 
-- **Статус сервера:** http://localhost:8000/health
-- **MCP endpoint:** http://localhost:8000/mcp
-
-Готово! 🎉
-
+- Статус сервера: http://localhost:8000/health
+- MCP endpoint: http://localhost:8000/mcp
+- Подробно: [_MCP_SERVER.md](_MCP_SERVER.md)

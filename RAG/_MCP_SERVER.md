@@ -25,7 +25,7 @@
 | `regex_search` | Поиск по regex-паттернам (IP, порты, VLAN) |
 | `find_abbreviation_expansion` | Расшифровка аббревиатур (КЦОИ, RAM, API) |
 | `read_table` | Чтение строк таблицы по названию раздела |
-| `get_section_content` | Полный текст раздела из `.md` файла |
+| `get_section_content` | Полный текст раздела (сборка из чанков ClickHouse) |
 | `list_sections` | Список разделов документации |
 | `get_neighbor_chunks` | Соседние чанки вокруг найденного фрагмента |
 | `get_chunks_by_index` | Чанки по индексам (source, section, chunk_indices) |
