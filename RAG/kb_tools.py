@@ -8,13 +8,13 @@ LangChain Tools для доступа к базе знаний в ClickHouse.
 Инструменты:
   semantic_search            — семантический поиск по эмбеддингам
   exact_search               — точный поиск по одной подстроке (positionCaseInsensitive)
-  exact_search_in_file       — точный поиск в конкретном файле
-  exact_search_in_file_section — точный поиск в конкретном разделе файла
+  exact_search_in_source       — точный поиск в конкретном файле
+  exact_search_in_source_section — точный поиск в конкретном разделе файла
   multi_term_exact_search    — точный поиск по списку терминов с ранжированием по покрытию
   find_sections_by_term      — поиск разделов содержащих термин (возвращает список source+section)
-  find_relevant_sections     — поиск разделов: название (подстрока) + семантика + опечатки (ngram) + термины
+  search_section_by_name     — поиск разделов: название (подстрока) + семантика + опечатки (ngram) + термины
   regex_search               — regex-поиск по исходным .md файлам с контекстом
-  find_abbreviation_expansion — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
+  search_abbreviation — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
   read_table                 — чтение строк таблицы по разделу
   get_section_content        — полный текст раздела из исходного .md файла
   list_sections              — дерево разделов базы знаний (по файлу или всей KB)
@@ -41,7 +41,6 @@ from pydantic import BaseModel, Field
 
 from clickhouse_store import ClickHouseVectorStore
 from llm_call_logger import LlmCallLogger
-from rag_chat import regex_search as _kb_regex_search
 
 logger = logging.getLogger(__name__)
 
@@ -210,13 +209,11 @@ class SourcesList(BaseModel):
 ALL_TOOLS = [
     "semantic_search",
     "exact_search",
-    "exact_search_in_file",
-    "exact_search_in_file_section",
     "multi_term_exact_search",
-    "find_sections_by_term",
-    "find_relevant_sections",
+
+    "search_section_by_name",
     "regex_search",
-    "find_abbreviation_expansion",
+    "search_abbreviation",
     "read_table",
     "get_section_content",
     "list_sections",
@@ -230,13 +227,11 @@ ALL_TOOLS = [
 AGENT_SELECTABLE_TOOLS = [
     "semantic_search",
     "exact_search",
-    "exact_search_in_file",
-    "exact_search_in_file_section",
     "multi_term_exact_search",
-    "find_sections_by_term",
-    "find_relevant_sections",
+
+    "search_section_by_name",
     "regex_search",
-    "find_abbreviation_expansion",
+    "search_abbreviation",
     "read_table",
     "get_section_content",
     "list_sections",
@@ -250,7 +245,7 @@ AGENT_SELECTABLE_TOOLS = [
 def _doc_to_chunk_metadata(meta: dict) -> ChunkMetadata:
     """Конвертер метаданных Document → ChunkMetadata"""
     return ChunkMetadata(
-        chunk_id=meta['chunk_id'],
+        chunk_id=meta.get('chunk_id', ''),
         source=meta['source'],
         section=meta['section'],
         chunk_type=meta['chunk_type'],
@@ -331,6 +326,37 @@ def _deduplicate_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
             unique_chunks.append(chunk)
     
     return unique_chunks
+
+
+def _regex_search_db(
+    vectorstore: ClickHouseVectorStore,
+    pattern: str,
+    max_results: int,
+) -> list[tuple[str, int, str]]:
+    """Regex search over ClickHouse chunk content using RE2 syntax.
+
+    Returns list of (source, line_start, matched_text) tuples.
+    Adds (?i) prefix for case-insensitive matching (mirrors re.IGNORECASE).
+    """
+    ci_pattern = f"(?i){pattern}"
+    client = vectorstore.clone()._client
+    db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
+    sql = f"""
+        SELECT source, line_start,
+               extractAll(content, {{pat:String}}) AS found
+        FROM {db}.{tbl} FINAL
+        WHERE match(content, {{pat:String}})
+        LIMIT {{lim:UInt32}}
+    """
+    query_result = client.query(
+        sql, parameters={"pat": ci_pattern, "lim": max_results * 5}
+    )
+    rows: list[tuple[str, int, str]] = []
+    for src, ls, found_list in query_result.result_rows:
+        for matched_text in found_list:
+            rows.append((src, int(ls), matched_text))
+    return rows[:max_results]
+
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -472,7 +498,7 @@ class SemanticSearchInput(BaseModel):
 
 
 class ExactSearchInput(BaseModel):
-    substring: str = Field(description="Exact substring to search (case-insensitive)")
+    query: str = Field(description="Exact substring to search (case-insensitive)")
     limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
     chunk_type: str = Field(
         default="",
@@ -481,26 +507,6 @@ class ExactSearchInput(BaseModel):
     source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
     section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
 
-
-class ExactSearchInFileInput(BaseModel):
-    substring: str = Field(description="Exact substring to search (case-insensitive)")
-    source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
-    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
-    chunk_type: Optional[str] = Field(
-        default=None,
-        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-    )
-
-
-class ExactSearchInFileSectionInput(BaseModel):
-    substring: str = Field(description="Exact substring to search (case-insensitive)")
-    source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
-    section: str = Field(description="Section name or breadcrumb substring to search in")
-    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
-    chunk_type: Optional[str] = Field(
-        default=None,
-        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-    )
 
 
 class MultiTermExactSearchInput(BaseModel):
@@ -532,22 +538,22 @@ class RegexSearchInput(BaseModel):
 
 
 class FindAbbreviationExpansionInput(BaseModel):
-    abbreviation: str = Field(
+    query: str = Field(
         description="Abbreviation in CAPITAL LETTERS to find expansion for. Supports letters and digits (e.g. 'КЦОИ', 'RAM', 'API', 'AK47', 'T34')"
     )
     max_results: int = Field(default=_REGEX_MAX, description="Max matches to return", ge=1, le=200)
 
 
 class ReadTableInput(BaseModel):
+    source: str = Field(description="Source filename (e.g. 'servers.md')")
     section: str = Field(
         description="Section breadcrumb substring to find tables in (e.g. 'Серверы СУБД', 'Сетевое оборудование')"
     )
-    source_file: Optional[str] = Field(default=None, description="Filter by source filename (e.g. 'servers.md')")
     limit: int = Field(default=50, description="Max rows to return", ge=1, le=500)
 
 
 class GetSectionContentInput(BaseModel):
-    source_file: str = Field(description="Source .md filename (e.g. 'Общее описание системы.md')")
+    source: str = Field(description="Source .md filename (e.g. 'Общее описание системы.md')")
     section: str = Field(
         description="Section name or breadcrumb path (last component is used for matching). "
                     "Example: 'Серверы СУБД' or 'Общее описание > Серверы СУБД'"
@@ -555,7 +561,7 @@ class GetSectionContentInput(BaseModel):
 
 
 class ListSectionsInput(BaseModel):
-    source_file: Optional[str] = Field(
+    source: Optional[str] = Field(
         default=None,
         description="Filter by source filename. Pass None to list sections from all files.",
     )
@@ -577,20 +583,6 @@ class GetChunksByIndexInput(BaseModel):
         max_length=50
     )
 
-
-class FindSectionsByTermInput(BaseModel):
-    substring: str = Field(description="Exact substring to search (case-insensitive)")
-    limit: int = Field(
-        default=100,
-        description="Max chunks to scan (all sections within this limit are returned)",
-        ge=1,
-        le=500
-    )
-    chunk_type: Optional[str] = Field(
-        default=None,
-        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-    )
-    source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
 
 
 class FindRelevantSectionsInput(BaseModel):
@@ -617,22 +609,20 @@ class FindRelevantSectionsInput(BaseModel):
 
 # Реестр схем: tool_name → Input-класс. Используется для pre-init валидации в CLI.
 TOOL_INPUT_SCHEMAS: dict[str, type[BaseModel] | None] = {
-    "semantic_search":              SemanticSearchInput,
-    "exact_search":                 ExactSearchInput,
-    "exact_search_in_file":         ExactSearchInFileInput,
-    "exact_search_in_file_section": ExactSearchInFileSectionInput,
-    "multi_term_exact_search":      MultiTermExactSearchInput,
-    "find_sections_by_term":        FindSectionsByTermInput,
-    "find_relevant_sections":       FindRelevantSectionsInput,
-    "regex_search":                 RegexSearchInput,
-    "find_abbreviation_expansion":  FindAbbreviationExpansionInput,
-    "read_table":                   ReadTableInput,
-    "get_section_content":          GetSectionContentInput,
-    "list_sections":                ListSectionsInput,
-    "get_neighbor_chunks":          GetNeighborChunksInput,
-    "get_chunks_by_index":          GetChunksByIndexInput,
-    "list_sources":                 None,  # нет параметров
-    "list_all_sections":            None,  # нет параметров
+    "semantic_search":             SemanticSearchInput,
+    "exact_search":                ExactSearchInput,
+    "multi_term_exact_search":     MultiTermExactSearchInput,
+
+    "search_section_by_name":      FindRelevantSectionsInput,
+    "regex_search":                RegexSearchInput,
+    "search_abbreviation": FindAbbreviationExpansionInput,
+    "read_table":                  ReadTableInput,
+    "get_section_content":         GetSectionContentInput,
+    "list_sections":               ListSectionsInput,
+    "get_neighbor_chunks":         GetNeighborChunksInput,
+    "get_chunks_by_index":         GetChunksByIndexInput,
+    "list_sources":                None,
+    "list_all_sections":           None,
 }
 
 
@@ -642,7 +632,7 @@ TOOL_INPUT_SCHEMAS: dict[str, type[BaseModel] | None] = {
 
 def create_kb_tools(
     vectorstore: ClickHouseVectorStore,
-    knowledge_dir: Path,
+    knowledge_dir: Optional[Path] = None,
     semantic_top_k: int = 10,
     exact_limit: int = 30,
     regex_max_results: int = 50,
@@ -651,12 +641,11 @@ def create_kb_tools(
     """
     Creates LangChain tools for knowledge base access.
 
-    Each tool captures vectorstore and knowledge_dir via closure.
-    Vectorstore is cloned per call to ensure thread safety.
+    All tools query ClickHouse directly; knowledge_dir is no longer required.
 
     Args:
         vectorstore:       Initialized ClickHouseVectorStore.
-        knowledge_dir:     Path to the directory with source .md files.
+        knowledge_dir:     Unused — kept for backward compatibility.
         semantic_top_k:    Default number of results for semantic search.
         exact_limit:       Default result limit for exact search.
         regex_max_results: Max matches to return from regex search.
@@ -735,7 +724,7 @@ def create_kb_tools(
 
     @tool(args_schema=ExactSearchInput)
     def exact_search(
-        substring: str,
+        query: str,
         limit: int = exact_limit,
         chunk_type: str = "",
         source: Optional[str] = None,
@@ -755,7 +744,7 @@ def create_kb_tools(
         - section: ограничить поиск подстрокой названия раздела
 
         Если заданы и source, и section, выполняется максимально точечный поиск
-        (эквивалент exact_search_in_file_section).
+        (эквивалент exact_search_in_source_section).
 
         Возвращает:
             SearchChunksResult: подстрока как запрос, список чанков и количество total_found
@@ -767,125 +756,30 @@ def create_kb_tools(
             filter_info.append(f"section~{section}")
         filter_str = f" [{', '.join(filter_info)}]" if filter_info else ""
 
-        logger.debug(f"Tool exact_search: substring='{substring}'{filter_str}, chunk_type={chunk_type!r}")
+        logger.debug(f"Tool exact_search: query='{query}'{filter_str}, chunk_type={chunk_type!r}")
         rec = _db_request(
             "DB:exact_search",
-            f"substring={substring!r}\nlimit={limit}\nchunk_type={chunk_type!r}{filter_str}",
+            f"query={query!r}\nlimit={limit}\nchunk_type={chunk_type!r}{filter_str}",
         )
-        
+
         # Поиск
         docs = vectorstore.clone().exact_search(
-            substring, limit=limit, chunk_type=chunk_type, source=source, section=section
+            query, limit=limit, chunk_type=chunk_type, source=source, section=section
         )
-        
+
         # Конвертация в структурированный результат и дедупликация
         chunks = _deduplicate_chunks(_docs_to_chunk_results(docs))
         result = SearchChunksResult(
-            query=substring,
+            query=query,
             chunks=chunks,
             total_found=len(chunks)
         )
-        
+
         # Логирование
         if rec:
             rec.set_response(result.model_dump_json(indent=2))
-        logger.info(f"exact_search '{substring}'{filter_str}: {len(chunks)} чанков")
-        
-        return result
+        logger.info(f"exact_search '{query}'{filter_str}: {len(chunks)} чанков")
 
-    @tool(args_schema=ExactSearchInFileInput)
-    def exact_search_in_file(
-        substring: str,
-        source_file: str,
-        limit: int = exact_limit,
-        chunk_type: Optional[str] = None
-    ) -> SearchChunksResult:
-        """
-        Точный регистронезависимый поиск подстроки в пределах конкретного файла.
-        Лучше всего для: сфокусированного поиска, когда известно точное имя файла; сужения
-        результатов до одного документа и отсечения шума из других файлов.
-        Сначала используйте list_sources, чтобы узнать доступные имена файлов.
-        Возвращает чанки только из указанного файла, отсортированные по номеру строки.
-        Каждый результат содержит breadcrumb раздела и line_start для расширения контекста.
-
-        Возвращает:
-            SearchChunksResult: подстрока как запрос, чанки из указанного файла, количество total_found
-        """
-        logger.debug(f"Tool exact_search_in_file: substring='{substring}', file='{source_file}'")
-        rec = _db_request(
-            "DB:exact_search_in_file",
-            f"substring={substring!r}\nsource_file={source_file!r}\nlimit={limit}\nchunk_type={chunk_type!r}",
-        )
-        
-        # Поиск
-        docs = vectorstore.clone().exact_search_in_file(
-            substring, source_file=source_file, limit=limit, chunk_type=chunk_type
-        )
-        
-        # Конвертация и дедупликация
-        chunks = _deduplicate_chunks(_docs_to_chunk_results(docs))
-        result = SearchChunksResult(
-            query=substring,
-            chunks=chunks,
-            total_found=len(chunks)
-        )
-        
-        # Логирование
-        if rec:
-            rec.set_response(result.model_dump_json(indent=2))
-        logger.info(f"exact_search_in_file '{substring}' in {source_file}: {len(chunks)} чанков")
-        
-        return result
-
-    @tool(args_schema=ExactSearchInFileSectionInput)
-    def exact_search_in_file_section(
-        substring: str,
-        source_file: str,
-        section: str,
-        limit: int = exact_limit,
-        chunk_type: Optional[str] = None
-    ) -> SearchChunksResult:
-        """
-        Точный регистронезависимый поиск подстроки в конкретном разделе конкретного файла.
-        Лучше всего для: максимально точечного поиска, когда известны и файл, и раздел;
-        поиска конкретных данных в известной структуре документации (например, IP в 'Servers > Database').
-        Сначала используйте list_sections, чтобы узнать точные названия разделов.
-        Возвращает чанки, совпавшие по файлу + разделу + подстроке, отсортированные по номеру строки.
-        Самый точный поисковый инструмент — минимум шума, максимум релевантности.
-
-        Возвращает:
-            SearchChunksResult: подстрока как запрос, чанки из указанного раздела, количество total_found
-        """
-        logger.debug(
-            f"Tool exact_search_in_file_section: substring='{substring}', "
-            f"file='{source_file}', section='{section}'"
-        )
-        rec = _db_request(
-            "DB:exact_search_in_file_section",
-            f"substring={substring!r}\nsource_file={source_file!r}\nsection={section!r}\n"
-            f"limit={limit}\nchunk_type={chunk_type!r}",
-        )
-        
-        # Поиск
-        docs = vectorstore.clone().exact_search_in_file_section(
-            substring, source_file, section, limit=limit, chunk_type=chunk_type
-        )
-        
-        # Конвертация и дедупликация
-        chunks = _deduplicate_chunks(_docs_to_chunk_results(docs))
-        result = SearchChunksResult(
-            query=substring,
-            chunks=chunks,
-            total_found=len(chunks)
-        )
-        
-        # Логирование
-        if rec:
-            rec.set_response(result.model_dump_json(indent=2))
-        logger.info(
-            f"exact_search_in_file_section '{substring}' в [{source_file}] -> {section}: {len(chunks)} чанков"
-        )
-        
         return result
 
     @tool(args_schema=MultiTermExactSearchInput)
@@ -977,82 +871,8 @@ def create_kb_tools(
         return result
 
 
-    @tool(args_schema=FindSectionsByTermInput)
-    def find_sections_by_term(
-        substring: str,
-        limit: int = 100,
-        chunk_type: Optional[str] = None,
-        source: Optional[str] = None
-    ) ->SearchSectionsResult:
-        """
-        Найти все уникальные разделы (source + section), содержащие точные совпадения подстроки.
-
-        Лучше всего для: выяснения, в каких разделах встречаются конкретные термины, перед углублением.
-        Возвращает список пар (source, section) со счётчиками совпадений, отсортированный по релевантности.
-        Используйте, чтобы выявить наиболее релевантные разделы, затем берите детали через exact_search
-        или get_section_content.
-
-        Сканирует до 'limit' чанков и возвращает ВСЕ уникальные разделы, найденные в пределах
-        этого сканирования. Например, при limit=100 и поиске "PostgreSQL" вы получите все разделы,
-        упоминающие PostgreSQL, в пределах первых 100 совпавших чанков.
-
-        Необязательные фильтры:
-        - source: ограничить поиск конкретным файлом
-        - chunk_type: фильтр по типу чанка
-
-        Возвращает:
-            SearchSectionsResult: подстрока как запрос, список разделов со счётчиками, total_found
-        """
-        filter_info = []
-        if source:
-            filter_info.append(f"file={source}")
-        filter_str = f" [{', '.join(filter_info)}]" if filter_info else ""
-        
-        logger.debug(
-            f"Tool find_sections_by_term: substring='{substring}'{filter_str}, "
-            f"limit={limit}, chunk_type={chunk_type!r}"
-        )
-        rec = _db_request(
-            "DB:find_sections_by_term",
-            f"substring={substring!r}\nlimit={limit}\nchunk_type={chunk_type!r}{filter_str}",
-        )
-        
-        # Поиск разделов
-        sections = vectorstore.clone().exact_search_sections(
-            substring, limit=limit, chunk_type=chunk_type, source=source
-        )
-        
-        # Конвертация в структурированный результат
-        section_infos = [
-            SectionInfo(
-                source=src,
-                section=sec,
-                match_count=cnt,
-                match_type="CONTENT"
-            )
-            for src, sec, cnt in sections
-        ]
-        
-        result = SearchSectionsResult(
-            query=substring,
-            sections=section_infos,
-            total_found=len(section_infos),
-            returned_count=len(section_infos)
-        )
-        
-        # Логирование
-        if rec:
-            rec.set_response(result.model_dump_json(indent=2))
-        logger.info(
-            f"find_sections_by_term '{substring}'{filter_str}: "
-            f"{result.total_found} разделов"
-        )
-        
-        return result
-
-
     @tool(args_schema=FindRelevantSectionsInput)
-    def find_relevant_sections(
+    def search_section_by_name(
         query: str,
         exact_terms: list[str] = None,
         limit: int = 50,
@@ -1096,12 +916,12 @@ def create_kb_tools(
         filter_str = f" [{', '.join(filter_info)}]" if filter_info else ""
 
         logger.debug(
-            f"Tool find_relevant_sections: query='{query}'{filter_str}, "
+            f"Tool search_section_by_name: query='{query}'{filter_str}, "
             f"exact_terms={exact_terms}, limit={limit}, "
             f"semantic_top_k={semantic_top_k}, fuzzy_top_k={fuzzy_top_k}"
         )
         rec = _db_request(
-            "DB:find_relevant_sections",
+            "DB:search_section_by_name",
             f"query={query!r}\nexact_terms={exact_terms}\nlimit={limit}{filter_str}",
         )
 
@@ -1202,7 +1022,7 @@ def create_kb_tools(
         if rec:
             rec.set_response(result.model_dump_json(indent=2))
         logger.info(
-            f"find_relevant_sections '{query}'{filter_str}: "
+            f"search_section_by_name '{query}'{filter_str}: "
             f"найдено {result.total_found} разделов, возвращено топ-{result.returned_count} "
             f"({name_cnt} назв., {sem_cnt} семант., {fuz_cnt} нечётк., {cont_cnt} содерж.)"
         )
@@ -1224,30 +1044,24 @@ def create_kb_tools(
         logger.debug(f"Tool regex_search: pattern='{pattern}'")
         rec = _db_request("DB:regex_search", f"pattern={pattern!r}\nmax_results={max_results}")
 
-        # Поиск (возвращает объект с matches и total_matches)
-        search_result = _kb_regex_search(pattern, knowledge_dir)
-
-        # Конвертация в структурированный результат
-        # Предполагаем что _kb_regex_search возвращает объект с полями file, line_number, match, context
+        rows = _regex_search_db(vectorstore, pattern, max_results)
         regex_matches = [
             RegexMatch(
-                file=m.file,
-                line_number=m.line_number,
-                matched_text=m.match,
-                context_before=[],  # Парсим context если нужно
-                matched_line=m.match,
-                context_after=[]
+                file=src,
+                line_number=line_start,
+                matched_text=matched_text,
+                context_before=[],
+                matched_line=matched_text,
+                context_after=[],
             )
-            for m in search_result.matches[:max_results]
+            for src, line_start, matched_text in rows
         ]
-
         result = RegexSearchResult(
             pattern=pattern,
             matches=regex_matches,
-            total_matches=search_result.total_matches
+            total_matches=len(regex_matches),
         )
 
-        # Логирование
         if rec:
             rec.set_response(result.model_dump_json(indent=2))
         logger.info(f"regex_search '{pattern}': {result.total_matches} совпадений")
@@ -1316,8 +1130,8 @@ def create_kb_tools(
         return pattern
 
     @tool(args_schema=FindAbbreviationExpansionInput)
-    def find_abbreviation_expansion(
-        abbreviation: str,
+    def search_abbreviation(
+        query: str,
         max_results: int = regex_max_results
     ) -> AbbreviationExpansionResult:
         """
@@ -1343,74 +1157,58 @@ def create_kb_tools(
         Возвращает:
             AbbreviationExpansionResult: аббревиатура, список расшифровок с чанками, общее число и паттерн
         """
-        logger.debug(f"Tool find_abbreviation_expansion: abbreviation='{abbreviation}'")
+        logger.debug(f"Tool search_abbreviation: query='{query}'")
 
         try:
-            # Генерируем regex паттерн
-            pattern = _build_abbreviation_pattern(abbreviation)
+            pattern = _build_abbreviation_pattern(query)
         except ValueError as e:
-            logger.error(f"Invalid abbreviation '{abbreviation}': {e}")
-            # Возвращаем пустой результат
+            logger.error(f"Invalid abbreviation '{query}': {e}")
             return AbbreviationExpansionResult(
-                abbreviation=abbreviation,
+                abbreviation=query,
                 expansions=[],
                 total_found=0,
                 pattern_used=""
             )
 
         rec = _db_request(
-            "DB:find_abbreviation_expansion",
-            f"abbreviation={abbreviation!r}\ngenerated_pattern={pattern!r}\nmax_results={max_results}"
+            "DB:search_abbreviation",
+            f"query={query!r}\ngenerated_pattern={pattern!r}\nmax_results={max_results}"
         )
 
-        # Используем существующий regex_search из rag_chat
-        search_result = _kb_regex_search(pattern, knowledge_dir)
+        rows = _regex_search_db(vectorstore, pattern, max_results * 3)
 
-        # Словарь: expansion -> список (file, line_number)
         expansions_map = {}
-        for match in search_result.matches[:max_results * 3]:  # Берем больше для дедупликации
-            # Очищаем текст от лишних пробелов и нормализуем
-            expansion = " ".join(match.match.split())
+        for src, line_start, matched_text in rows:
+            expansion = " ".join(matched_text.split())
             if expansion:
                 if expansion not in expansions_map:
                     expansions_map[expansion] = []
-                expansions_map[expansion].append((match.file, match.line_number))
+                expansions_map[expansion].append((src, line_start))
 
-        # Для каждой уникальной расшифровки находим чанк в vectorstore
         expansion_items = []
         for expansion, locations in sorted(expansions_map.items())[:max_results]:
-            # Берем первое местоположение
             source_file, line_num = locations[0]
-            
-            # Ищем чанк в vectorstore по точному совпадению расшифровки
-            # Используем exact_search с фильтром по файлу
             docs = vectorstore.clone().exact_search(
                 expansion,
-                limit=5,  # Берем несколько, выберем наиболее подходящий
-                chunk_type="",  # Только prose chunks
+                limit=5,
+                chunk_type="",
                 source=source_file,
                 section=None
             )
-            
-            # Ищем чанк который содержит нужную строку или ближайший по line_start
+
             best_doc = None
             min_distance = float('inf')
-            
             for doc in docs:
-                # Проверяем, что чанк содержит искомую расшифровку
                 if expansion.lower() in doc.page_content.lower():
                     line_start = doc.metadata.get('line_start', 0)
                     distance = abs(line_start - line_num)
                     if distance < min_distance:
                         min_distance = distance
                         best_doc = doc
-            
-            # Если не нашли точного совпадения, берем первый
             if best_doc is None and docs:
                 best_doc = docs[0]
-            
+
             if best_doc:
-                # Конвертируем в ChunkResult
                 chunk = ChunkResult(
                     content=best_doc.page_content,
                     metadata=ChunkMetadata(
@@ -1425,49 +1223,47 @@ def create_kb_tools(
                     ),
                     score=None
                 )
-                
                 expansion_items.append(AbbreviationExpansionItem(
                     expansion=expansion,
                     chunk=chunk
                 ))
 
         result = AbbreviationExpansionResult(
-            abbreviation=abbreviation,
+            abbreviation=query,
             expansions=expansion_items,
             total_found=len(expansion_items),
             pattern_used=pattern
         )
 
-        # Логирование
         if rec:
             rec.set_response(result.model_dump_json(indent=2))
         logger.info(
-            f"find_abbreviation_expansion '{abbreviation}': {result.total_found} уникальных расшифровок с чанками"
+            f"search_abbreviation '{query}': {result.total_found} уникальных расшифровок с чанками"
         )
 
         return result
 
     @tool(args_schema=ReadTableInput)
-    def read_table(section: str, source_file: Optional[str] = None, limit: int = 50) -> TableResult:
+    def read_table(source: str, section: str, limit: int = 50) -> TableResult:
         """
         Прочитать строки таблицы из конкретного раздела базы знаний.
         Возвращает структурированные строки таблицы со столбцами в виде словаря для удобной обработки.
         Лучше всего для: структурированных данных — таблиц IP, списков серверов, назначений VLAN,
         версий ПО.
         При необходимости сначала используйте list_sections, чтобы узнать точное название раздела.
-        Если задан source_file, поиск идёт только по этому файлу.
+        Если задан source, поиск идёт только по этому файлу.
 
         Возвращает:
             TableResult: section_query, список строк со столбцами и количество total_rows
         """
-        logger.debug(f"Tool read_table: section='{section}', source_file={source_file!r}")
+        logger.debug(f"Tool read_table: section='{section}', source={source!r}")
         rec = _db_request(
             "DB:read_table",
-            f"section={section!r}\nsource_file={source_file!r}\nlimit={limit}",
+            f"section={section!r}\nsource={source!r}\nlimit={limit}",
         )
-        
+
         # Поиск табличных чанков
-        docs = _query_table_chunks(vectorstore, section, source_file, limit)
+        docs = _query_table_chunks(vectorstore, section, source, limit)
         
         # Конвертация в структурированный результат
         rows = [_doc_to_table_row(doc) for doc in docs]
@@ -1485,7 +1281,7 @@ def create_kb_tools(
         return result
 
     @tool(args_schema=GetSectionContentInput)
-    def get_section_content(source_file: str, section: str) -> SectionContent:
+    def get_section_content(source: str, section: str) -> SectionContent:
         """
         Прочитать полный текст конкретного раздела.
         Лучше всего для: чтения целых разделов, которые могут быть разбиты на множество чанков,
@@ -1496,8 +1292,8 @@ def create_kb_tools(
         Returns:
             SectionContent with source, section name, line numbers, and full content
         """
-        logger.debug(f"Tool get_section_content: [{source_file}] '{section}'")
-        rec = _db_request("DB:get_section_content", f"source_file={source_file!r}\nsection={section!r}")
+        logger.debug(f"Tool get_section_content: [{source}] '{section}'")
+        rec = _db_request("DB:get_section_content", f"source={source!r}\nsection={section!r}")
 
         client = vectorstore.clone()._client
         db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
@@ -1510,18 +1306,18 @@ def create_kb_tools(
               AND chunk_type != 'table_row'
             ORDER BY line_start, chunk_index
         """
-        query_result = client.query(sql, parameters={"src": source_file, "sec": section})
+        query_result = client.query(sql, parameters={"src": source, "sec": section})
 
         if not query_result.result_rows:
-            rows = _query_sections(vectorstore, source_file)
+            rows = _query_sections(vectorstore, source)
             similar = [s for _, s in rows if section.lower() in s.lower()][:5]
             hint = (
                 f"Похожие разделы: {'; '.join(similar)}" if similar
                 else "Используйте list_sections для поиска разделов."
             )
-            error_msg = f"Раздел '{section}' не найден в файле '{source_file}'. {hint}"
+            error_msg = f"Раздел '{section}' не найден в файле '{source}'. {hint}"
             result = SectionContent(
-                source=source_file,
+                source=source,
                 section=section,
                 line_start=0,
                 line_end=0,
@@ -1537,7 +1333,7 @@ def create_kb_tools(
         content = "\n\n".join(row[0] for row in query_result.result_rows if row[0].strip())
 
         result = SectionContent(
-            source=source_file,
+            source=source,
             section=section,
             line_start=line_start,
             line_end=line_end,
@@ -1546,27 +1342,27 @@ def create_kb_tools(
 
         if rec:
             rec.set_response(f"{len(content)} символов\n\n{result.model_dump_json(indent=2)}")
-        logger.info(f"get_section_content: [{source_file}] '{section}' — {len(content)} символов")
+        logger.info(f"get_section_content: [{source}] '{section}' — {len(content)} символов")
 
         return result
 
     @tool(args_schema=ListSectionsInput)
-    def list_sections(source_file: Optional[str] = None) -> SectionsTree:
+    def list_sections(source: Optional[str] = None) -> SectionsTree:
         """
         Список всех разделов (breadcrumb-пути H1 > H2 > ...) в базе знаний.
         Лучше всего для: обзора доступного содержимого, выяснения точного названия раздела перед
         использованием get_section_content или read_table, понимания структуры документов.
-        Необязательно фильтровать по source_file, чтобы увидеть разделы только одного документа.
+        Необязательно фильтровать по source, чтобы увидеть разделы только одного документа.
         Сначала используйте list_sources, чтобы узнать имена файлов.
 
         Возвращает:
             SectionsTree: необязательный фильтр по источнику, список разделов со счётчиками чанков и общее число
         """
-        logger.debug(f"Tool list_sections: source_file={source_file!r}")
-        rec = _db_request("DB:list_sections", f"source_file={source_file!r}")
-        
+        logger.debug(f"Tool list_sections: source={source!r}")
+        rec = _db_request("DB:list_sections", f"source={source!r}")
+
         # Запрос разделов
-        rows = _query_sections(vectorstore, source_file)
+        rows = _query_sections(vectorstore, source)
         
         # Подсчёт чанков для каждого раздела
         # rows содержит (source, section) пары, нужно получить count
@@ -1602,7 +1398,7 @@ def create_kb_tools(
         ]
         
         result = SectionsTree(
-            source=source_file,
+            source=source,
             sections=section_nodes,
             total_sections=len(section_nodes)
         )
@@ -1906,13 +1702,10 @@ def create_kb_tools(
     return [
         semantic_search,
         exact_search,
-        exact_search_in_file,
-        exact_search_in_file_section,
         multi_term_exact_search,
-        find_sections_by_term,
-        find_relevant_sections,
+        search_section_by_name,
         regex_search,
-        find_abbreviation_expansion,
+        search_abbreviation,
         read_table,
         get_section_content,
         list_sections,
@@ -1933,13 +1726,11 @@ def get_tool_registry() -> dict[str, str]:
     return {
         "semantic_search": "Семантический поиск по эмбеддингам (концептуальные вопросы)",
         "exact_search": "Точный поиск по подстроке (термины, названия, коды)",
-        "exact_search_in_file": "Точный поиск в конкретном файле",
-        "exact_search_in_file_section": "Точный поиск в конкретном разделе файла",
         "multi_term_exact_search": "Поиск по нескольким терминам с ранжированием (автоудаление дубликатов)",
-        "find_sections_by_term": "Поиск разделов содержащих термин (возвращает список source+section)",
-        "find_relevant_sections": "Поиск разделов: название + семантика (синонимы) + ngram (опечатки) + термины",
+
+        "search_section_by_name": "Поиск разделов: название + семантика (синонимы) + ngram (опечатки) + термины",
         "regex_search": "Поиск по regex-паттернам (IP, порты, VLAN)",
-        "find_abbreviation_expansion": "Поиск расшифровки аббревиатур (КЦОИ, RAM, API)",
+        "search_abbreviation": "Поиск расшифровки аббревиатур (КЦОИ, RAM, API)",
         "read_table": "Чтение строк таблицы по названию раздела",
         "get_section_content": "Полный текст раздела (сборка из чанков ClickHouse)",
         "list_sections": "Список разделов документации",
@@ -1954,39 +1745,64 @@ def get_tool_registry() -> dict[str, str]:
 # CLI Interface
 # ---------------------------------------------------------------------------
 
-def _cli_list_tools(tools: list[BaseTool]) -> None:
-    """Выводит краткий список инструментов компактно"""
+_TOOL_GROUPS = [
+    ("Поиск по содержимому", [
+        "semantic_search",
+        "exact_search",
+        "multi_term_exact_search",
+        "regex_search",
+        "search_abbreviation",
+    ]),
+    ("Поиск по именам разделов", [
+        "search_section_by_name",
     
-    # Собираем данные
-    rows = []
+    ]),
+    ("Чтение контента", [
+        "get_section_content",
+        "read_table",
+        "get_neighbor_chunks",
+        "get_chunks_by_index",
+    ]),
+    ("Навигация", [
+        "list_sources",
+        "list_sections",
+        "list_all_sections",
+    ]),
+]
+
+
+def _cli_list_tools(tools: list[BaseTool]) -> None:
+    """Выводит краткий список инструментов по группам"""
+    tool_map: dict[str, str] = {}
     for tool in tools:
-        # Получаем имена параметров
         param_names = []
         if hasattr(tool, 'args_schema') and tool.args_schema:
             schema = tool.args_schema
             if hasattr(schema, 'model_fields'):
                 for field_name, field_info in schema.model_fields.items():
-                    required = field_info.is_required()
-                    if required:
-                        param_names.append(field_name)
-                    else:
-                        param_names.append(f"[{field_name}]")
-        
-        params_str = ', '.join(param_names) if param_names else '-'
-        rows.append((tool.name, params_str))
-    
-    if not rows:
+                    param_names.append(field_name if field_info.is_required() else f"[{field_name}]")
+        tool_map[tool.name] = ', '.join(param_names) if param_names else '-'
+
+    if not tool_map:
         print("Нет доступных инструментов")
         return
-    
-    # Вычисляем максимальную ширину названия для выравнивания
-    max_name_len = max(len(row[0]) for row in rows)
-    
-    # Выводим список
-    for name, params in rows:
-        print(f"{name:<{max_name_len}}  {params}")
-    
-    print(f"\nВсего: {len(rows)} | Детали: python kb_tools.py help <инструмент>")
+
+    max_name_len = max(len(n) for n in tool_map)
+
+    first_group = True
+    print()
+    for group_label, group_tools in _TOOL_GROUPS:
+        group_rows = [(n, tool_map[n]) for n in group_tools if n in tool_map]
+        if not group_rows:
+            continue
+        if not first_group:
+            print()
+        print(f"  {group_label}:")
+        for name, params in group_rows:
+            print(f"    {name:<{max_name_len}}  {params}")
+        first_group = False
+
+    print(f"\nВсего: {len(tool_map)} | Детали: python kb_tools.py help <инструмент>")
 
 
 def _cli_help_tool(tools: list[BaseTool], tool_name: str) -> None:
@@ -2079,6 +1895,8 @@ def main():
     import argparse
     import sys
     from pathlib import Path
+    from logging_config import setup_logging
+    setup_logging("kb_tools")
     
     parser = argparse.ArgumentParser(
         description="KB Tools CLI - инструменты для работы с базой знаний",
@@ -2099,9 +1917,9 @@ def main():
   python kb_tools.py help exact_search
 
   # Вызвать инструмент
-  python kb_tools.py run exact_search substring="КЦОИ" limit=10
+  python kb_tools.py run exact_search query="КЦОИ" limit=10
   python kb_tools.py run semantic_search query="что такое RAG" top_k=5
-  python kb_tools.py run find_abbreviation_expansion abbreviation="AK47"
+  python kb_tools.py run search_abbreviation abbreviation="AK47"
 
   # Построить индекс названий секций (после реиндексации)
   python kb_tools.py build-section-index

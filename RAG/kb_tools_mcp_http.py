@@ -58,10 +58,6 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
 logger = logging.getLogger("kb_tools_mcp_http")
 
 # Реестр инструментов {tool_name: BaseTool}, заполняется в _init_tools().
@@ -98,7 +94,6 @@ def _init_tools() -> None:
 
     tools = create_kb_tools(
         vectorstore=vectorstore,
-        knowledge_dir=Path(settings.knowledge_dir),
         semantic_top_k=settings.retriever_top_k,
         exact_limit=30,
         regex_max_results=50,
@@ -193,11 +188,45 @@ def build_app(json_response: bool = False) -> Starlette:
             }
         )
 
+    _CORS_HEADERS = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+
+    async def handle_call(request: Request) -> JSONResponse:
+        """REST-эндпоинт для HTML-клиента: POST /call {"tool": "...", "args": {...}}"""
+        if request.method == "OPTIONS":
+            return JSONResponse({}, headers=_CORS_HEADERS)
+        data = await request.json()
+        tool_name = data.get("tool")
+        args = data.get("args", {})
+        if tool_name not in _tools_map:
+            return JSONResponse(
+                {"ok": False, "error": f"Tool '{tool_name}' not found"},
+                status_code=404, headers=_CORS_HEADERS,
+            )
+        tool = _tools_map[tool_name]
+        logger.info("REST /call: %s args=%s", tool_name, json.dumps(args, ensure_ascii=False))
+        try:
+            result = await anyio.to_thread.run_sync(lambda: tool.invoke(args))
+            text = _result_to_text(result)
+            try:
+                result_data = json.loads(text)
+            except Exception:
+                result_data = text
+            return JSONResponse({"ok": True, "result": result_data}, headers=_CORS_HEADERS)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)},
+                status_code=500, headers=_CORS_HEADERS,
+            )
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         _init_tools()
         async with session_manager.run():
-            logger.info("MCP-сервер готов. Эндпоинт: /mcp, статус: /health")
+            logger.info("MCP-сервер готов. Эндпоинт: /mcp, статус: /health, REST: /call")
             yield
             logger.info("MCP-сервер остановлен")
 
@@ -205,6 +234,7 @@ def build_app(json_response: bool = False) -> Starlette:
         debug=False,
         routes=[
             Route("/health", health, methods=["GET"]),
+            Route("/call", handle_call, methods=["POST", "OPTIONS"]),
             Mount("/mcp", app=handle_streamable_http),
         ],
         lifespan=lifespan,
@@ -239,11 +269,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    from logging_config import setup_logging
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    setup_logging("kb_tools_mcp_http", level=log_level)
     if args.debug:
-        # DEBUG только для наших модулей: корневой логгер оставляем на INFO,
-        # иначе сторонние библиотеки (sse_starlette, mcp.streamable_http) дампят
-        # сырые байты SSE-чанков (русский текст выглядит как \xd0\x9e...).
-        logger.setLevel(logging.DEBUG)
         logging.getLogger("kb_tools").setLevel(logging.DEBUG)
         # Заглушаем особо шумные DEBUG-логгеры транспорта на всякий случай.
         logging.getLogger("sse_starlette").setLevel(logging.INFO)
