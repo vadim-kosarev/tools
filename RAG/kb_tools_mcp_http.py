@@ -1,104 +1,86 @@
-"""MCP Server — SSE транспорт (без mcp пакета).
+"""MCP-сервер (Streamable HTTP) для инструментов базы знаний.
 
-Реализует протокол MCP (Model Context Protocol) поверх SSE транспорта вручную:
-  GET  /sse                → непрерывный SSE поток (Continue.dev подключается сюда)
-  POST /messages?sessionId → JSON-RPC сообщения от клиента
+Использует официальный MCP SDK (пакет ``mcp``) с транспортом Streamable HTTP.
+Все инструменты из ``kb_tools.create_kb_tools()`` автоматически публикуются как
+MCP tools: их JSON-схемы берутся из ``args_schema`` LangChain-инструментов.
 
-Все инструменты базы знаний автоматически регистрируются как MCP tools.
+Эндпоинт MCP:  http://<host>:<port>/mcp
+Проверка статуса (обычный GET):  http://<host>:<port>/health
 
-Запуск:
-    uvicorn kb_tools_mcp_http:app --host 0.0.0.0 --port 8000 --reload
-    # или
+Запуск через uv (рекомендуется, используя уже наполненный .venv проекта):
+    uv run --active kb_tools_mcp_http.py
+    uv run --active kb_tools_mcp_http.py --host 0.0.0.0 --port 8000
+
+Запуск напрямую интерпретатором venv:
     python kb_tools_mcp_http.py
 
-Continue.dev (.continue/config.json):
+Конфиг MCP-клиента (Streamable HTTP):
     {
-      "experimental": {
-        "modelContextProtocolServers": [
-          {
-            "transport": { "type": "sse", "url": "http://localhost:8000/sse" }
-          }
-        ]
+      "mcpServers": {
+        "kb-tools": { "url": "http://localhost:8000/mcp" }
       }
     }
-
-REST API (дополнительно, для отладки):
-    GET  /health            → статус сервера
-    GET  /tools             → список инструментов
-    POST /tools/{name}      → прямой вызов инструмента
 """
 
-import asyncio
+from __future__ import annotations
+
+import argparse
+import contextlib
 import json
-import traceback
-import uuid
-from pathlib import Path
-from typing import Any, Dict, Optional
-
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
-
-from clickhouse_store import ClickHouseStoreSettings, build_store
-from kb_tools import create_kb_tools
-from rag_chat import Settings
-
-# ---------------------------------------------------------------------------
-# Настройка
-# ---------------------------------------------------------------------------
-
-settings = Settings()
-
 import logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+import os
+import sys
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
+import anyio
+import mcp.types as types
+import uvicorn
+from mcp.server.lowlevel import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+from starlette.types import Receive, Scope, Send
+
+# Папка RAG в sys.path — чтобы локальные модули (kb_tools, clickhouse_store,
+# rag_chat) импортировались при запуске из любой директории.
+_RAG_DIR = Path(__file__).parent
+if str(_RAG_DIR) not in sys.path:
+    sys.path.insert(0, str(_RAG_DIR))
+
+# Кириллица в логах PowerShell без иероглифов.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger("kb_tools_mcp_http")
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_tools()
-    yield
+# Реестр инструментов {tool_name: BaseTool}, заполняется в _init_tools().
+_tools_map: dict[str, Any] = {}
 
 
-app = FastAPI(
-    title="KB Tools MCP Server",
-    description="MCP протокол (SSE транспорт) для инструментов базы знаний",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ---------------------------------------------------------------------------
-# Глобальное состояние
-# ---------------------------------------------------------------------------
-
-_tools_map: Dict[str, Any] = {}          # {tool_name: BaseTool}
-_sessions: Dict[str, asyncio.Queue] = {} # {session_id: Queue}
-_vectorstore = None
-
-# ---------------------------------------------------------------------------
-# Инициализация инструментов
-# ---------------------------------------------------------------------------
-
-def init_tools() -> None:
-    """Инициализирует vectorstore и регистрирует LangChain tools."""
-    global _tools_map, _vectorstore
+def _init_tools() -> None:
+    """Инициализирует vectorstore и регистрирует LangChain-инструменты."""
+    global _tools_map
+    if _tools_map:
+        return
 
     from langchain_ollama import OllamaEmbeddings
+
+    from clickhouse_store import ClickHouseStoreSettings, build_store
+    from kb_tools import create_kb_tools
+    from rag_chat import Settings
+
+    settings = Settings()
 
     cfg = ClickHouseStoreSettings(
         host=settings.clickhouse_host,
@@ -112,48 +94,30 @@ def init_tools() -> None:
         model=settings.ollama_embed_model,
         base_url=settings.ollama_base_url,
     )
+    vectorstore = build_store(cfg=cfg, embedding=embedding, force_reindex=False)
 
-    _vectorstore = build_store(cfg=cfg, embedding=embedding, force_reindex=False)
-
-    tools_list = create_kb_tools(
-        vectorstore=_vectorstore,
+    tools = create_kb_tools(
+        vectorstore=vectorstore,
         knowledge_dir=Path(settings.knowledge_dir),
         semantic_top_k=settings.retriever_top_k,
         exact_limit=30,
         regex_max_results=50,
     )
-    _tools_map = {t.name: t for t in tools_list}
-    logger.info(f"Зарегистрировано {len(_tools_map)} инструментов: {list(_tools_map)}")
+    _tools_map = {t.name: t for t in tools}
+    logger.info("Зарегистрировано %d инструментов: %s", len(_tools_map), list(_tools_map))
 
 
-# ---------------------------------------------------------------------------
-# MCP вспомогательные функции
-# ---------------------------------------------------------------------------
-
-def _mcp_tools_list() -> list[dict]:
-    """Возвращает список инструментов в формате MCP (inputSchema)."""
-    result = []
-    for name, tool in _tools_map.items():
-        schema: dict = {}
-        if hasattr(tool, "args_schema") and tool.args_schema:
-            schema = tool.args_schema.model_json_schema()
-            schema.pop("title", None)   # MCP не требует title
-        result.append({
-            "name": name,
-            "description": tool.description or name,
-            "inputSchema": schema or {"type": "object", "properties": {}},
-        })
-    return result
+def _tool_input_schema(tool: Any) -> dict:
+    """JSON-схема параметров инструмента в формате MCP inputSchema."""
+    schema: dict = {}
+    if getattr(tool, "args_schema", None):
+        schema = tool.args_schema.model_json_schema()
+        schema.pop("title", None)
+    return schema or {"type": "object", "properties": {}}
 
 
-def _invoke_tool(name: str, arguments: dict) -> str:
-    """Вызывает инструмент и возвращает результат как строку."""
-    if name not in _tools_map:
-        raise ValueError(f"Инструмент '{name}' не найден")
-
-    tool = _tools_map[name]
-    result = tool.invoke(arguments)
-
+def _result_to_text(result: Any) -> str:
+    """Приводит результат инструмента к строке для MCP TextContent."""
     if isinstance(result, str):
         return result
     if hasattr(result, "model_dump"):
@@ -164,175 +128,135 @@ def _invoke_tool(name: str, arguments: dict) -> str:
         return str(result)
 
 
-def _ok(req_id: Any, result: Any) -> dict:
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+def build_mcp_server() -> Server:
+    """Создаёт low-level MCP-сервер с обработчиками list_tools / call_tool."""
+    server: Server = Server("kb-tools")
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [
+            types.Tool(
+                name=name,
+                description=tool.description or name,
+                inputSchema=_tool_input_schema(tool),
+            )
+            for name, tool in _tools_map.items()
+        ]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+        if name not in _tools_map:
+            raise ValueError(f"Инструмент '{name}' не найден")
+        tool = _tools_map[name]
+        # Логируем имя инструмента и аргументы, которыми его зовёт клиент —
+        # видно, что именно запрашивает агент (полезно при «ничего не найдено»).
+        logger.info("call_tool: %s args=%s", name, json.dumps(arguments, ensure_ascii=False))
+        # tool.invoke синхронный и может быть медленным (ClickHouse/Ollama) —
+        # выполняем в пуле потоков, чтобы не блокировать event loop.
+        result = await anyio.to_thread.run_sync(lambda: tool.invoke(arguments))
+        text = _result_to_text(result)
+        # Читаемый результат (с русскими буквами) — байтовый дамп SSE-транспорта
+        # их экранирует, поэтому логируем сами на уровне DEBUG.
+        logger.debug("result %s: %s", name, text)
+        return [types.TextContent(type="text", text=text)]
+
+    return server
 
 
-def _err(req_id: Any, code: int, message: str) -> dict:
-    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+def build_app(json_response: bool = False) -> Starlette:
+    """Собирает Starlette-приложение с MCP-эндпоинтом /mcp и /health."""
+    server = build_mcp_server()
 
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=json_response,
+        stateless=True,
+        # Локальный доверенный сервер — отключаем DNS-rebinding защиту,
+        # иначе при пустом allowlist все запросы отклоняются.
+        security_settings=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        ),
+    )
 
-async def _handle_jsonrpc(body: dict) -> Optional[dict]:
-    """Обрабатывает JSON-RPC запрос, возвращает ответ или None (для уведомлений)."""
-    method  = body.get("method", "")
-    params  = body.get("params") or {}
-    req_id  = body.get("id")        # None для уведомлений
+    async def handle_streamable_http(scope: Scope, receive: Receive, send: Send) -> None:
+        await session_manager.handle_request(scope, receive, send)
 
-    logger.info(f"← {method} (id={req_id})")
+    async def health(_request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "status": "ok",
+                "transport": "streamable-http",
+                "mcp_endpoint": "/mcp",
+                "tools_count": len(_tools_map),
+                "tools": list(_tools_map),
+            }
+        )
 
-    # Уведомления (нет id) → ответа не требуют
-    if req_id is None:
-        return None
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        _init_tools()
+        async with session_manager.run():
+            logger.info("MCP-сервер готов. Эндпоинт: /mcp, статус: /health")
+            yield
+            logger.info("MCP-сервер остановлен")
 
-    try:
-        # ── Handshake ─────────────────────────────────────────────────────
-        if method == "initialize":
-            return _ok(req_id, {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo":    {"name": "kb-tools", "version": "1.0.0"},
-            })
-
-        # ── Список инструментов ───────────────────────────────────────────
-        elif method == "tools/list":
-            return _ok(req_id, {"tools": _mcp_tools_list()})
-
-        # ── Вызов инструмента ─────────────────────────────────────────────
-        elif method == "tools/call":
-            tool_name = params.get("name", "")
-            tool_args = params.get("arguments") or {}
-            try:
-                text = _invoke_tool(tool_name, tool_args)
-                return _ok(req_id, {
-                    "content": [{"type": "text", "text": text}],
-                    "isError": False,
-                })
-            except Exception as exc:
-                return _ok(req_id, {
-                    "content": [{"type": "text", "text": str(exc)}],
-                    "isError": True,
-                })
-
-        # ── Ping ──────────────────────────────────────────────────────────
-        elif method == "ping":
-            return _ok(req_id, {})
-
-        else:
-            return _err(req_id, -32601, f"Метод не найден: {method}")
-
-    except Exception as exc:
-        logger.error(f"Ошибка при обработке {method}: {exc}\n{traceback.format_exc()}")
-        return _err(req_id, -32603, f"Internal error: {exc}")
-
-# ---------------------------------------------------------------------------
-# SSE Transport  (GET /sse  +  POST /messages)
-# ---------------------------------------------------------------------------
-
-@app.get("/sse")
-async def sse_endpoint(request: Request):
-    """
-    SSE-поток для MCP клиента (Continue.dev).
-
-    Порядок работы:
-    1. Клиент подключается GET /sse
-    2. Сервер отправляет event:endpoint с адресом для POST
-    3. Клиент посылает JSON-RPC сообщения в POST /messages?sessionId=...
-    4. Сервер отправляет ответы обратно через SSE
-    """
-    session_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
-    _sessions[session_id] = queue
-    logger.info(f"SSE сессия открыта: {session_id[:8]}…")
-
-    async def generator():
-        # Первое событие — адрес для отправки сообщений
-        yield f"event: endpoint\ndata: /messages?sessionId={session_id}\n\n"
-
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                # Отправляем накопленные ответы
-                try:
-                    msg = queue.get_nowait()
-                    payload = json.dumps(msg, ensure_ascii=False)
-                    yield f"event: message\ndata: {payload}\n\n"
-                    logger.info(f"→ [sse:{session_id[:8]}] id={msg.get('id')} method_result")
-                except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.05)
-        finally:
-            _sessions.pop(session_id, None)
-            logger.info(f"SSE сессия закрыта: {session_id[:8]}…")
-
-    return StreamingResponse(
-        generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control":    "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection":       "keep-alive",
-        },
+    return Starlette(
+        debug=False,
+        routes=[
+            Route("/health", health, methods=["GET"]),
+            Mount("/mcp", app=handle_streamable_http),
+        ],
+        lifespan=lifespan,
     )
 
 
-@app.post("/messages")
-async def messages_endpoint(request: Request, sessionId: str = Query(...)):
-    """Принимает JSON-RPC сообщения от клиента и отвечает через SSE."""
-    queue = _sessions.get(sessionId)
-    if not queue:
-        return JSONResponse({"error": f"Сессия '{sessionId}' не найдена"}, status_code=404)
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="MCP Streamable HTTP сервер для инструментов базы знаний",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("MCP_HTTP_HOST", "0.0.0.0"),
+        help="Адрес привязки (по умолчанию 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("MCP_HTTP_PORT", "8000")),
+        help="Порт (по умолчанию 8000)",
+    )
+    parser.add_argument(
+        "--json-response",
+        action="store_true",
+        help="Отдавать ответы как application/json вместо SSE (удобно для отладки curl)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=os.getenv("MCP_HTTP_DEBUG", "").lower() in ("1", "true", "yes"),
+        help="Подробное логирование (level=DEBUG): аргументы инструментов, SQL и пр.",
+    )
+    args = parser.parse_args()
 
-    try:
-        body = await request.json()
-    except Exception as exc:
-        return JSONResponse({"error": f"Некорректный JSON: {exc}"}, status_code=400)
+    if args.debug:
+        # DEBUG только для наших модулей: корневой логгер оставляем на INFO,
+        # иначе сторонние библиотеки (sse_starlette, mcp.streamable_http) дампят
+        # сырые байты SSE-чанков (русский текст выглядит как \xd0\x9e...).
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger("kb_tools").setLevel(logging.DEBUG)
+        # Заглушаем особо шумные DEBUG-логгеры транспорта на всякий случай.
+        logging.getLogger("sse_starlette").setLevel(logging.INFO)
+        logging.getLogger("mcp.server.streamable_http").setLevel(logging.INFO)
+        logger.debug("DEBUG-логирование включено (только модули kb_tools*)")
 
-    response = await _handle_jsonrpc(body)
-    if response is not None:
-        await queue.put(response)
+    app = build_app(json_response=args.json_response)
 
-    return JSONResponse({}, status_code=202)
+    logger.info("Запуск MCP-сервера на http://%s:%d/mcp", args.host, args.port)
+    # timeout_graceful_shutdown: по Ctrl+C не ждём бесконечно закрытия
+    # keep-alive/SSE-соединений клиента — через 5 с рвём принудительно.
+    uvicorn.run(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
 
-# ---------------------------------------------------------------------------
-# REST API (бонус — для отладки через curl / браузер)
-# ---------------------------------------------------------------------------
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "tools_count": len(_tools_map),
-        "sessions_active": len(_sessions),
-        "mcp_endpoint": "GET /sse",
-        "messages_endpoint": "POST /messages?sessionId=...",
-    }
-
-
-@app.get("/tools")
-async def list_tools_rest():
-    """Список инструментов в читаемом формате (REST)."""
-    return {"tools": _mcp_tools_list(), "count": len(_tools_map)}
-
-
-@app.post("/tools/{tool_name}")
-async def invoke_tool_rest(tool_name: str, request: Request):
-    """Прямой вызов инструмента (REST, для отладки)."""
-    if tool_name not in _tools_map:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
-    try:
-        args = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}")
-    try:
-        return {"tool": tool_name, "success": True, "result": _invoke_tool(tool_name, args)}
-    except Exception as exc:
-        return {"tool": tool_name, "success": False, "error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("kb_tools_mcp_http:app", host="0.0.0.0", port=8000, reload=True)
+    main()

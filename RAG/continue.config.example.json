@@ -1,7 +1,7 @@
 {
   "comment": "Скопируйте нужный блок в ~/.continue/config.json",
 
-  "=== Continue.dev >= 0.9 (stdio транспорт, рекомендуется) ===": {},
+  "=== stdio транспорт (рекомендуется: Continue сам запускает процесс) ===": {},
   "mcpServers": {
     "kb-tools": {
       "command": "C:/dev/github.com/vadim-kosarev/tools.0/RAG/kb_tools_mcp_stdio.bat",
@@ -10,15 +10,13 @@
     }
   },
 
-  "=== Альтернатива: SSE транспорт (нужен запущенный kb_tools_mcp_http.py) ===": {},
-  "mcpServers_sse": {
+  "=== Streamable HTTP (нужен запущенный kb_tools_mcp_http.py) ===": {},
+  "mcpServers_http": {
     "kb-tools": {
       "transport": {
-        "type": "sse",
-        "url": "http://localhost:8000/sse"
+        "type": "streamable-http",
+        "url": "http://localhost:8000/mcp"
       }
     }
   }
 }
-
-

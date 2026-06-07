@@ -20,10 +20,10 @@ mcpServers:
 #       - C:/dev/github.com/vadim-kosarev/tools.0/RAG/kb_tools_mcp_stdio.py
 #     env: {}
 
-# ── Альтернатива: SSE транспорт (если запущен kb_tools_mcp_http.py) ─────────
+# ── Альтернатива: Streamable HTTP (если запущен kb_tools_mcp_http.py) ───────
 #
 # mcpServers:
 #   - name: kb-tools
 #     transport:
-#       type: sse
-#       url: http://localhost:8000/sse
+#       type: streamable-http
+#       url: http://localhost:8000/mcp

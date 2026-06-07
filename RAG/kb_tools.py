@@ -476,7 +476,7 @@ def _query_table_chunks(
     """
     client = vectorstore.clone()._client
     db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
-    where = ["positionCaseInsensitive(section, {sec:String}) > 0",
+    where = ["positionCaseInsensitiveUTF8(section, {sec:String}) > 0",
              "chunk_type IN ('table_row', 'table_full')"]
     params: dict = {"sec": section_substring, "lim": limit}
     if source_file:

@@ -40,11 +40,18 @@ mcpServers:
     env: {}
 ```
 
-### Способ 2: SSE транспорт (нужен запущенный сервер)
+### Способ 2: Streamable HTTP транспорт (нужен запущенный сервер)
 
-Запустите сервер:
+Запустите сервер (через uv, использует `.venv` проекта):
 ```powershell
-.\start_kb_tools_mcp_http.ps1
+.\start_kb_tools_mcp_http.ps1                 # http://localhost:8000/mcp
+# или вручную (venv активирован):
+uv run --active --no-project kb_tools_mcp_http.py --host 0.0.0.0 --port 8000
+```
+
+Проверка статуса:
+```powershell
+Invoke-RestMethod http://localhost:8000/health
 ```
 
 Конфиг:
@@ -52,8 +59,8 @@ mcpServers:
 mcpServers:
   - name: kb-tools
     transport:
-      type: sse
-      url: http://localhost:8000/sse
+      type: streamable-http
+      url: http://localhost:8000/mcp
 ```
 
 ---
@@ -64,8 +71,8 @@ mcpServers:
 |------|-----------|
 | `kb_tools_mcp_stdio.py` | stdio транспорт (для Continue.dev `command`) |
 | `kb_tools_mcp_stdio.bat` | bat-обёртка для запуска kb_tools_mcp_stdio.py с venv |
-| `kb_tools_mcp_http.py` | SSE транспорт (HTTP сервер `uvicorn`) |
-| `start_kb_tools_mcp_http.ps1` | скрипт запуска SSE сервера |
+| `kb_tools_mcp_http.py` | Streamable HTTP транспорт (официальный MCP SDK) |
+| `start_kb_tools_mcp_http.ps1` | запуск HTTP сервера через uv |
 | `continue.config.example.yaml` | готовый конфиг с вариантами |
 
 ---
@@ -84,8 +91,8 @@ echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python kb_tools_mcp_stdi
 
 ## Документация
 
-- **Swagger UI (SSE режим):** http://localhost:8000/docs
-- **Полная документация:** MCP_SERVER.md
+- **Статус сервера:** http://localhost:8000/health
+- **MCP endpoint:** http://localhost:8000/mcp
 
 Готово! 🎉
 

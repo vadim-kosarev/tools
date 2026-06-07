@@ -43,7 +43,10 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-import chromadb  # noqa: F401 — kept for potential direct use by external scripts
+try:
+    import chromadb  # noqa: F401 — kept for potential direct use by external scripts
+except ImportError:
+    pass
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings

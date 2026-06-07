@@ -1,7 +1,6 @@
-# Additional requirements for MCP Server
-# Основные зависимости уже должны быть установлены из requirements.txt
+# Дополнительные зависимости для MCP-сервера (Streamable HTTP транспорт).
+# Базовые зависимости (langchain, clickhouse-connect и т.д.) — из requirements.txt.
 
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-python-multipart>=0.0.6
-
+mcp>=1.21
+uvicorn[standard]>=0.27
+starlette>=0.40

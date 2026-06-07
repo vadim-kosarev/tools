@@ -281,7 +281,7 @@ class ClickHouseVectorStore(VectorStore):
             params["src"] = source
         
         if section is not None:
-            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            where_clauses.append("positionCaseInsensitiveUTF8(section, {sec:String}) > 0")
             params["sec"] = section
         
         where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
@@ -330,7 +330,7 @@ class ClickHouseVectorStore(VectorStore):
             source:     Optional source file filter.
             section:    Optional section substring filter.
         """
-        where_clauses = ["positionCaseInsensitive(content, {sub:String}) > 0"]
+        where_clauses = ["positionCaseInsensitiveUTF8(content, {sub:String}) > 0"]
         params: dict[str, Any] = {"sub": substring, "lim": limit}
         
         if chunk_type is not None:
@@ -342,7 +342,7 @@ class ClickHouseVectorStore(VectorStore):
             params["src"] = source
         
         if section is not None:
-            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            where_clauses.append("positionCaseInsensitiveUTF8(section, {sec:String}) > 0")
             params["sec"] = section
 
         order_by = "ORDER BY line_start, chunk_index" if source else ""
@@ -390,7 +390,7 @@ class ClickHouseVectorStore(VectorStore):
             chunk_type:  Optional chunk_type filter.
         """
         where_clauses = [
-            "positionCaseInsensitive(content, {sub:String}) > 0",
+            "positionCaseInsensitiveUTF8(content, {sub:String}) > 0",
             "source = {file:String}"
         ]
         if chunk_type is not None:
@@ -444,9 +444,9 @@ class ClickHouseVectorStore(VectorStore):
             chunk_type:         Optional chunk_type filter.
         """
         where_clauses = [
-            "positionCaseInsensitive(content, {sub:String}) > 0",
+            "positionCaseInsensitiveUTF8(content, {sub:String}) > 0",
             "source = {file:String}",
-            "positionCaseInsensitive(section, {sec:String}) > 0"
+            "positionCaseInsensitiveUTF8(section, {sec:String}) > 0"
         ]
         if chunk_type is not None:
             where_clauses.append("chunk_type = {ct:String}")
@@ -523,7 +523,7 @@ class ClickHouseVectorStore(VectorStore):
 
         # Build: sum of per-term boolean hits as match_count
         match_expr = " + ".join(
-            f"(positionCaseInsensitive(content, {{t{i}:String}}) > 0)"
+            f"(positionCaseInsensitiveUTF8(content, {{t{i}:String}}) > 0)"
             for i in range(len(terms))
         )
 
@@ -540,7 +540,7 @@ class ClickHouseVectorStore(VectorStore):
             params["src"] = source
         
         if section is not None:
-            where_clauses.append("positionCaseInsensitive(section, {sec:String}) > 0")
+            where_clauses.append("positionCaseInsensitiveUTF8(section, {sec:String}) > 0")
             params["sec"] = section
 
         sql = f"""
@@ -594,7 +594,7 @@ class ClickHouseVectorStore(VectorStore):
             List of (source, section, match_count) tuples sorted by match_count DESC.
             match_count = number of chunks in that section containing the term.
         """
-        where_clauses = ["positionCaseInsensitive(content, {sub:String}) > 0"]
+        where_clauses = ["positionCaseInsensitiveUTF8(content, {sub:String}) > 0"]
         params: dict[str, Any] = {"sub": substring, "lim": limit}
 
         if chunk_type is not None:
@@ -643,7 +643,7 @@ class ClickHouseVectorStore(VectorStore):
             List of (source, section, chunk_count) tuples.
             chunk_count = total number of chunks in that section.
         """
-        where_clauses = ["positionCaseInsensitive(section, {name:String}) > 0"]
+        where_clauses = ["positionCaseInsensitiveUTF8(section, {name:String}) > 0"]
         params: dict[str, Any] = {"name": name_substring}
 
         if source is not None:
