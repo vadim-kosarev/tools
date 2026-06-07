@@ -32,8 +32,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
@@ -334,70 +332,6 @@ def _deduplicate_chunks(chunks: list[ChunkResult]) -> list[ChunkResult]:
     return unique_chunks
 
 # ---------------------------------------------------------------------------
-# Заголовочный regex (для чтения секций из .md файлов)
-# ---------------------------------------------------------------------------
-
-_HEADER_RE = re.compile(r"^(#{1,4})\s+(.+)$")
-_MD_LINK_ANCHOR_RE = re.compile(r"\[([^\]]+)\]\(#[^)]*\)")
-_PANDOC_ANCHOR_RE  = re.compile(r"\(#[^)]+\)")
-_PANDOC_ATTR_RE    = re.compile(r"\{[^}]+\}")
-
-
-def _clean_header_text(text: str) -> str:
-    """Removes Pandoc-generated anchor links from heading text."""
-    text = _MD_LINK_ANCHOR_RE.sub(r"\1", text)
-    text = _PANDOC_ANCHOR_RE.sub("", text)
-    text = _PANDOC_ATTR_RE.sub("", text)
-    return text.strip()
-
-
-def read_full_section(knowledge_dir: Path, source_file: str, section_breadcrumb: str) -> str | None:
-    """
-    Reads the full text of a section from a .md source file by breadcrumb path.
-
-    Finds the heading matching the last breadcrumb component and collects all
-    content until the next heading of equal or higher level.
-    Returns None if file or section is not found.
-    """
-    matches = list(knowledge_dir.glob(f"**/{source_file}"))
-    if not matches:
-        return None
-    md_file = matches[0]
-    try:
-        text = md_file.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:
-        logger.warning(f"Не удалось прочитать {source_file}: {exc}")
-        return None
-
-    target_header = section_breadcrumb.split(" > ")[-1].strip() if section_breadcrumb else ""
-    if not target_header:
-        return None
-
-    lines = text.splitlines(keepends=True)
-    in_section = False
-    section_level = 0
-    collected: list[str] = []
-
-    for line in lines:
-        m = _HEADER_RE.match(line.rstrip())
-        if m:
-            level = len(m.group(1))
-            header_text = _clean_header_text(m.group(2).strip())
-            if not in_section:
-                if header_text.lower() == target_header.lower():
-                    in_section = True
-                    section_level = level
-                    collected.append(line)
-            else:
-                if level <= section_level:
-                    break
-                collected.append(line)
-        elif in_section:
-            collected.append(line)
-
-    return "".join(collected).strip() if collected else None
-
-
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
@@ -451,14 +385,14 @@ def _query_sections(
             f"SELECT DISTINCT source, section "
             f"FROM {db}.{tbl} FINAL "
             f"WHERE source = {{src:String}} "
-            f"ORDER BY source, section LIMIT 500"
+            f"ORDER BY source, section LIMIT 1000"
         )
         result = client.query(sql, parameters={"src": source_file})
     else:
         sql = (
             f"SELECT DISTINCT source, section "
             f"FROM {db}.{tbl} FINAL "
-            f"ORDER BY source, section LIMIT 2000"
+            f"ORDER BY source, section LIMIT 1000"
         )
         result = client.query(sql)
     return [(r[0], r[1]) for r in result.result_rows]
@@ -506,6 +440,182 @@ def _query_table_chunks(
 
 
 # ---------------------------------------------------------------------------
+# Pydantic-схемы аргументов инструментов (модульный уровень)
+# ---------------------------------------------------------------------------
+# Defaults совпадают с параметрами-умолчаниями create_kb_tools().
+# Схемы живут здесь — не внутри create_kb_tools — чтобы CLI мог валидировать
+# аргументы ДО подключения к БД (lazy init pattern).
+
+_SEMANTIC_TOP_K = 10
+_EXACT_LIMIT = 30
+_REGEX_MAX = 50
+
+
+class SemanticSearchInput(BaseModel):
+    query: str = Field(description="Query text for semantic similarity search (in Russian or English)")
+    top_k: int = Field(default=_SEMANTIC_TOP_K, description="Number of results to return", ge=1, le=50)
+    chunk_type: str = Field(
+        default="",
+        description="Filter by chunk type: '' (prose chunks, default), 'table_row' (table rows), 'table_full' (full tables), or empty string for prose only"
+    )
+    source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
+    section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
+
+
+class ExactSearchInput(BaseModel):
+    substring: str = Field(description="Exact substring to search (case-insensitive)")
+    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
+    chunk_type: str = Field(
+        default="",
+        description="Filter by chunk type: '' (prose chunks, default), 'table_row' (table rows), 'table_full' (full tables)"
+    )
+    source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
+    section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
+
+
+class ExactSearchInFileInput(BaseModel):
+    substring: str = Field(description="Exact substring to search (case-insensitive)")
+    source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
+    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
+    chunk_type: Optional[str] = Field(
+        default=None,
+        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
+    )
+
+
+class ExactSearchInFileSectionInput(BaseModel):
+    substring: str = Field(description="Exact substring to search (case-insensitive)")
+    source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
+    section: str = Field(description="Section name or breadcrumb substring to search in")
+    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
+    chunk_type: Optional[str] = Field(
+        default=None,
+        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
+    )
+
+
+class MultiTermExactSearchInput(BaseModel):
+    terms: list[str] = Field(
+        description=(
+            "List of UNIQUE substrings to search simultaneously (case-insensitive). "
+            "Each chunk is scored by how many terms it contains. "
+            "Results are ranked: chunks matching ALL terms first, then most terms, "
+            "then fewer — so the most relevant results always appear at the top. "
+            "NOTE: Duplicate terms will be automatically removed."
+        )
+    )
+    limit: int = Field(default=_EXACT_LIMIT, description="Max results", ge=1, le=200)
+    chunk_type: str = Field(
+        default="",
+        description="Filter by chunk type: '' (prose chunks, default), 'table_row', 'table_full'"
+    )
+    source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
+    section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
+
+
+class RegexSearchInput(BaseModel):
+    pattern: str = Field(
+        description=r"Regex pattern to search in source .md files. "
+                    r"Examples: r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' for IPs, "
+                    r"r'порт\s*:?\s*\d+' for ports, r'vlan\s*:?\s*\d+' for VLANs."
+    )
+    max_results: int = Field(default=_REGEX_MAX, description="Max matches to return", ge=1, le=200)
+
+
+class FindAbbreviationExpansionInput(BaseModel):
+    abbreviation: str = Field(
+        description="Abbreviation in CAPITAL LETTERS to find expansion for. Supports letters and digits (e.g. 'КЦОИ', 'RAM', 'API', 'AK47', 'T34')"
+    )
+    max_results: int = Field(default=_REGEX_MAX, description="Max matches to return", ge=1, le=200)
+
+
+class ReadTableInput(BaseModel):
+    section: str = Field(
+        description="Section breadcrumb substring to find tables in (e.g. 'Серверы СУБД', 'Сетевое оборудование')"
+    )
+    source_file: Optional[str] = Field(default=None, description="Filter by source filename (e.g. 'servers.md')")
+    limit: int = Field(default=50, description="Max rows to return", ge=1, le=500)
+
+
+class GetSectionContentInput(BaseModel):
+    source_file: str = Field(description="Source .md filename (e.g. 'Общее описание системы.md')")
+    section: str = Field(
+        description="Section name or breadcrumb path (last component is used for matching). "
+                    "Example: 'Серверы СУБД' or 'Общее описание > Серверы СУБД'"
+    )
+
+
+class ListSectionsInput(BaseModel):
+    source_file: Optional[str] = Field(
+        default=None,
+        description="Filter by source filename. Pass None to list sections from all files.",
+    )
+
+
+class GetNeighborChunksInput(BaseModel):
+    source: str = Field(description="Source filename (from previous search result metadata)")
+    line_start: int = Field(description="line_start value of the anchor chunk", ge=1)
+    before: int = Field(default=5, description="Number of chunks before the anchor", ge=0, le=30)
+    after: int = Field(default=5, description="Number of chunks after the anchor", ge=0, le=30)
+
+
+class GetChunksByIndexInput(BaseModel):
+    source: str = Field(description="Source filename (e.g. 'servers.md')")
+    section: str = Field(description="Section name or breadcrumb path")
+    chunk_indices: list[int] = Field(
+        description="List of chunk indices to retrieve (e.g. [0, 1, 5])",
+        min_length=1,
+        max_length=50
+    )
+
+
+class FindSectionsByTermInput(BaseModel):
+    substring: str = Field(description="Exact substring to search (case-insensitive)")
+    limit: int = Field(
+        default=100,
+        description="Max chunks to scan (all sections within this limit are returned)",
+        ge=1,
+        le=500
+    )
+    chunk_type: Optional[str] = Field(
+        default=None,
+        description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
+    )
+    source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
+
+
+class FindRelevantSectionsInput(BaseModel):
+    query: str = Field(description="User query phrase (for section name matching)")
+    exact_terms: list[str] = Field(
+        description="List of exact terms to search in content (for content matching)",
+        default_factory=list
+    )
+    limit: int = Field(default=50, description="Maximum number of sections to return in results", ge=1, le=200)
+    source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
+
+
+# Реестр схем: tool_name → Input-класс. Используется для pre-init валидации в CLI.
+TOOL_INPUT_SCHEMAS: dict[str, type[BaseModel] | None] = {
+    "semantic_search":              SemanticSearchInput,
+    "exact_search":                 ExactSearchInput,
+    "exact_search_in_file":         ExactSearchInFileInput,
+    "exact_search_in_file_section": ExactSearchInFileSectionInput,
+    "multi_term_exact_search":      MultiTermExactSearchInput,
+    "find_sections_by_term":        FindSectionsByTermInput,
+    "find_relevant_sections":       FindRelevantSectionsInput,
+    "regex_search":                 RegexSearchInput,
+    "find_abbreviation_expansion":  FindAbbreviationExpansionInput,
+    "read_table":                   ReadTableInput,
+    "get_section_content":          GetSectionContentInput,
+    "list_sections":                ListSectionsInput,
+    "get_neighbor_chunks":          GetNeighborChunksInput,
+    "get_chunks_by_index":          GetChunksByIndexInput,
+    "list_sources":                 None,  # нет параметров
+    "list_all_sections":            None,  # нет параметров
+}
+
+
+# ---------------------------------------------------------------------------
 # Фабрика инструментов
 # ---------------------------------------------------------------------------
 
@@ -543,144 +653,6 @@ def create_kb_tools(
             rec.set_request(request)
             return rec
         return None
-
-    # ── Pydantic schemas for tool inputs ──────────────────────────────
-
-    class SemanticSearchInput(BaseModel):
-        query: str = Field(description="Query text for semantic similarity search (in Russian or English)")
-        top_k: int = Field(default=semantic_top_k, description="Number of results to return", ge=1, le=50)
-        chunk_type: str = Field(
-            default="",
-            description="Filter by chunk type: '' (prose chunks, default), 'table_row' (table rows), 'table_full' (full tables), or empty string for prose only"
-        )
-        source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
-        section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
-
-    class ExactSearchInput(BaseModel):
-        substring: str = Field(description="Exact substring to search (case-insensitive)")
-        limit: int = Field(default=exact_limit, description="Max results", ge=1, le=200)
-        chunk_type: str = Field(
-            default="",
-            description="Filter by chunk type: '' (prose chunks, default), 'table_row' (table rows), 'table_full' (full tables)"
-        )
-        source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
-        section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
-
-    class ExactSearchInFileInput(BaseModel):
-        substring: str = Field(description="Exact substring to search (case-insensitive)")
-        source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
-        limit: int = Field(default=exact_limit, description="Max results", ge=1, le=200)
-        chunk_type: Optional[str] = Field(
-            default=None,
-            description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-        )
-
-    class ExactSearchInFileSectionInput(BaseModel):
-        substring: str = Field(description="Exact substring to search (case-insensitive)")
-        source_file: str = Field(description="Source filename to search in (e.g. 'servers.md')")
-        section: str = Field(description="Section name or breadcrumb substring to search in")
-        limit: int = Field(default=exact_limit, description="Max results", ge=1, le=200)
-        chunk_type: Optional[str] = Field(
-            default=None,
-            description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-        )
-
-    class MultiTermExactSearchInput(BaseModel):
-        terms: list[str] = Field(
-            description=(
-                "List of UNIQUE substrings to search simultaneously (case-insensitive). "
-                "Each chunk is scored by how many terms it contains. "
-                "Results are ranked: chunks matching ALL terms first, then most terms, "
-                "then fewer — so the most relevant results always appear at the top. "
-                "NOTE: Duplicate terms will be automatically removed."
-            )
-        )
-        limit: int = Field(default=exact_limit, description="Max results", ge=1, le=200)
-        chunk_type: str = Field(
-            default="",
-            description="Filter by chunk type: '' (prose chunks, default), 'table_row', 'table_full'"
-        )
-        source: Optional[str] = Field(default=None, description="Optional: filter by source filename (e.g. 'servers.md')")
-        section: Optional[str] = Field(default=None, description="Optional: filter by section name/breadcrumb substring")
-
-    class RegexSearchInput(BaseModel):
-        pattern: str = Field(
-            description=r"Regex pattern to search in source .md files. "
-                        r"Examples: r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' for IPs, "
-                        r"r'порт\s*:?\s*\d+' for ports, r'vlan\s*:?\s*\d+' for VLANs."
-        )
-        max_results: int = Field(default=regex_max_results, description="Max matches to return", ge=1, le=200)
-
-    class FindAbbreviationExpansionInput(BaseModel):
-        abbreviation: str = Field(
-            description="Abbreviation in CAPITAL LETTERS to find expansion for. Supports letters and digits (e.g. 'КЦОИ', 'RAM', 'API', 'AK47', 'T34')"
-        )
-        max_results: int = Field(default=regex_max_results, description="Max matches to return", ge=1, le=200)
-
-    class ReadTableInput(BaseModel):
-        section: str = Field(
-            description="Section breadcrumb substring to find tables in (e.g. 'Серверы СУБД', 'Сетевое оборудование')"
-        )
-        source_file: Optional[str] = Field(default=None, description="Filter by source filename (e.g. 'servers.md')")
-        limit: int = Field(default=50, description="Max rows to return", ge=1, le=500)
-
-    class GetSectionContentInput(BaseModel):
-        source_file: str = Field(description="Source .md filename (e.g. 'Общее описание системы.md')")
-        section: str = Field(
-            description="Section name or breadcrumb path (last component is used for matching). "
-                        "Example: 'Серверы СУБД' or 'Общее описание > Серверы СУБД'"
-        )
-
-    class ListSectionsInput(BaseModel):
-        source_file: Optional[str] = Field(
-            default=None,
-            description="Filter by source filename. Pass None to list sections from all files.",
-        )
-
-    class GetNeighborChunksInput(BaseModel):
-        source: str = Field(description="Source filename (from previous search result metadata)")
-        line_start: int = Field(description="line_start value of the anchor chunk", ge=1)
-        before: int = Field(default=5, description="Number of chunks before the anchor", ge=0, le=30)
-        after: int = Field(default=5, description="Number of chunks after the anchor", ge=0, le=30)
-
-    class GetChunksByIndexInput(BaseModel):
-        source: str = Field(description="Source filename (e.g. 'servers.md')")
-        section: str = Field(description="Section name or breadcrumb path")
-        chunk_indices: list[int] = Field(
-            description="List of chunk indices to retrieve (e.g. [0, 1, 5])",
-            min_items=1,
-            max_items=50
-        )
-
-    class FindSectionsByTermInput(BaseModel):
-        substring: str = Field(description="Exact substring to search (case-insensitive)")
-        limit: int = Field(
-            default=100,
-            description="Max chunks to scan (all sections within this limit are returned)",
-            ge=1,
-            le=500
-        )
-        chunk_type: Optional[str] = Field(
-            default=None,
-            description="Filter by chunk type: 'table_row', 'table_full', '' (prose), None (all)",
-        )
-        source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
-
-    class FindRelevantSectionsInput(BaseModel):
-        query: str = Field(
-            description="User query phrase (for section name matching)"
-        )
-        exact_terms: list[str] = Field(
-            description="List of exact terms to search in content (for content matching)",
-            default_factory=list
-        )
-        limit: int = Field(
-            default=50,
-            description="Maximum number of sections to return in results",
-            ge=1,
-            le=200
-        )
-        source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
 
     # ── Tool implementations ──────────────────────────────────────────
 
@@ -1471,26 +1443,26 @@ def create_kb_tools(
         Возвращает весь текст раздела, включая подразделы.
         Сначала используйте list_sections, чтобы узнать точные имена раздела и файла.
 
-        ВНИМАНИЕ / АРХИТЕКТУРНОЕ ПРАВИЛО (TODO):
-            Инструменты базы знаний ДОЛЖНЫ работать ТОЛЬКО с ClickHouse.
-            Исходные .md-файлы используются исключительно на этапе индексации
-            (загрузка чанков в БД). Текущая реализация читает текст с диска через
-            read_full_section() — это нарушает правило и ломается, когда сервер не
-            видит knowledge_dir или заголовок в файле не совпадает с индексом.
-            Переделать: собирать полный текст раздела из чанков ClickHouse
-            (source + section, ORDER BY line_start, chunk_index), без файлов.
-
         Returns:
-            SectionContent with source, section name, line numbers (approximate), and full content
+            SectionContent with source, section name, line numbers, and full content
         """
         logger.debug(f"Tool get_section_content: [{source_file}] '{section}'")
         rec = _db_request("DB:get_section_content", f"source_file={source_file!r}\nsection={section!r}")
-        
-        # Чтение полного раздела из .md файла
-        content = read_full_section(knowledge_dir, source_file, section)
-        
-        if content is None:
-            # Если не найдено - возвращаем пустой результат (можно бросить исключение или вернуть пустой)
+
+        client = vectorstore.clone()._client
+        db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
+        # table_row excluded: each parsed table is already present as table_full
+        sql = f"""
+            SELECT content, line_start, line_end
+            FROM {db}.{tbl} FINAL
+            WHERE source = {{src:String}}
+              AND section = {{sec:String}}
+              AND chunk_type != 'table_row'
+            ORDER BY line_start, chunk_index
+        """
+        query_result = client.query(sql, parameters={"src": source_file, "sec": section})
+
+        if not query_result.result_rows:
             rows = _query_sections(vectorstore, source_file)
             similar = [s for _, s in rows if section.lower() in s.lower()][:5]
             hint = (
@@ -1498,8 +1470,6 @@ def create_kb_tools(
                 else "Используйте list_sections для поиска разделов."
             )
             error_msg = f"Раздел '{section}' не найден в файле '{source_file}'. {hint}"
-            
-            # Возвращаем пустой SectionContent с сообщением об ошибке
             result = SectionContent(
                 source=source_file,
                 section=section,
@@ -1511,23 +1481,11 @@ def create_kb_tools(
                 rec.set_response(error_msg)
             logger.warning(error_msg)
             return result
-        
-        # Попытка определить номера строк (приблизительно) через запрос к БД
-        # Ищем любой чанк из этого раздела чтобы узнать line_start
-        client = vectorstore.clone()._client
-        db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
-        sql = f"""
-            SELECT MIN(line_start) as start, MAX(line_end) as end
-            FROM {db}.{tbl} FINAL
-            WHERE source = {{src:String}} AND section = {{sec:String}}
-        """
-        query_result =client.query(sql, parameters={"src": source_file, "sec": section})
-        line_start, line_end = 0, 0
-        if query_result.result_rows:
-            line_start = query_result.result_rows[0][0] or 0
-            line_end = query_result.result_rows[0][1] or 0
-        
-        # Конвертация в структурированный результат
+
+        line_start = query_result.result_rows[0][1]
+        line_end = query_result.result_rows[-1][2]
+        content = "\n\n".join(row[0] for row in query_result.result_rows if row[0].strip())
+
         result = SectionContent(
             source=source_file,
             section=section,
@@ -1535,12 +1493,11 @@ def create_kb_tools(
             line_end=line_end,
             content=content
         )
-        
-        # Логирование
+
         if rec:
             rec.set_response(f"{len(content)} символов\n\n{result.model_dump_json(indent=2)}")
         logger.info(f"get_section_content: [{source_file}] '{section}' — {len(content)} символов")
-        
+
         return result
 
     @tool(args_schema=ListSectionsInput)
@@ -1934,7 +1891,7 @@ def get_tool_registry() -> dict[str, str]:
         "regex_search": "Поиск по regex-паттернам (IP, порты, VLAN)",
         "find_abbreviation_expansion": "Поиск расшифровки аббревиатур (КЦОИ, RAM, API)",
         "read_table": "Чтение строк таблицы по названию раздела",
-        "get_section_content": "Полный текст раздела из .md файла",
+        "get_section_content": "Полный текст раздела (сборка из чанков ClickHouse)",
         "list_sections": "Список разделов документации",
         "get_neighbor_chunks": "Соседние чанки вокруг найденного фрагмента",
         "get_chunks_by_index": "Получить конкретные чанки по индексам (source, section, chunk_indices[])",
@@ -2045,23 +2002,26 @@ def _cli_run_tool(tools: list[BaseTool], tool_name: str, args: dict) -> None:
     try:
         # Вызываем инструмент
         result = tool.invoke(args)
-        
+
         # Выводим результат в JSON
         if hasattr(result, 'model_dump'):
-            # Pydantic модель
             print(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
         elif hasattr(result, 'dict'):
-            # Старый Pydantic
             print(json.dumps(result.dict(), ensure_ascii=False, indent=2))
         else:
-            # Обычный объект
             print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    
+
     except Exception as e:
-        print(f"Ошибка выполнения: {e}", file=__import__('sys').stderr)
-        import traceback
-        traceback.print_exc()
-        __import__('sys').exit(1)
+        import sys
+        from pydantic import ValidationError
+        if isinstance(e, ValidationError):
+            print(f"Ошибка параметров: {e}\n", file=sys.stderr)
+            _cli_help_tool(tools, tool_name)
+        else:
+            print(f"Ошибка выполнения: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
 
 
 def main():
@@ -2120,74 +2080,95 @@ def main():
     args = parser.parse_args()
     
     # Если команда help без tool_name - показываем общий help
-    if args.command == 'help' and not hasattr(args, 'tool_name') or (hasattr(args, 'tool_name') and args.tool_name is None):
+    if args.command == 'help' and (not hasattr(args, 'tool_name') or args.tool_name is None):
         parser.print_help()
         sys.exit(0)
-    
-    # Инициализация vectorstore и knowledge_dir (только если нужно для команды)
-    tools = None
-    if args.command in ['list', 'run'] or (args.command == 'help' and hasattr(args, 'tool_name') and args.tool_name):
+
+    def _parse_params(raw_params: list[str]) -> dict:
+        tool_args: dict = {}
+        for param in raw_params:
+            if '=' not in param:
+                print(f"Предупреждение: пропущен параметр '{param}' (ожидается формат param=value)", file=sys.stderr)
+                continue
+            key, value = param.split('=', 1)
+            try:
+                value = int(value)
+            except ValueError:
+                try:
+                    value = float(value)
+                except ValueError:
+                    if isinstance(value, str) and (value.startswith('[') or value.startswith('{')):
+                        try:
+                            value = json.loads(value)
+                        except Exception:
+                            pass
+            tool_args[key] = value
+        return tool_args
+
+    def _init_tools() -> list[BaseTool]:
+        from rag_chat import build_vectorstore, settings
+        print("Инициализация vectorstore...", file=sys.stderr)
+        vectorstore = build_vectorstore()
+        knowledge_dir = Path(settings.knowledge_dir)
+        return create_kb_tools(vectorstore, knowledge_dir)
+
+    # ── run: валидируем параметры ДО подключения к БД ───────────────
+    if args.command == 'run':
+        tool_name = args.tool_name
+        tool_args = _parse_params(args.params)
+
+        if tool_name not in TOOL_INPUT_SCHEMAS:
+            print(f"Ошибка: неизвестный инструмент '{tool_name}'", file=sys.stderr)
+            print(f"Доступные: {', '.join(TOOL_INPUT_SCHEMAS)}", file=sys.stderr)
+            sys.exit(1)
+
+        schema_cls = TOOL_INPUT_SCHEMAS[tool_name]
+        if schema_cls is not None:
+            from pydantic import ValidationError as _VE
+            try:
+                schema_cls.model_validate(tool_args)
+            except _VE as e:
+                print(f"Ошибка параметров:\n{e}\n", file=sys.stderr)
+                # Показываем схему без подключения к БД
+                print("=" * 80)
+                print(f"Инструмент: {tool_name}")
+                print("=" * 80)
+                print("\nПараметры:\n")
+                for field_name, field_info in schema_cls.model_fields.items():
+                    type_str = str(field_info.annotation).replace("typing.", "").replace("<class '", "").replace("'>", "")
+                    req_str = "обязательный" if field_info.is_required() else f"опциональный (default={field_info.default})"
+                    print(f"  {field_name}={type_str}  [{req_str}]")
+                    if field_info.description:
+                        print(f"    {field_info.description}")
+                    print()
+                print(f"Использование: python kb_tools.py run {tool_name} param=value ...")
+                sys.exit(1)
+
+        # Параметры валидны — теперь подключаемся к БД
         try:
-            from clickhouse_store import ClickHouseVectorStore
-            from rag_chat import build_vectorstore, settings
-            
-            print("Инициализация vectorstore...", file=sys.stderr)
-            vectorstore = build_vectorstore()
-            knowledge_dir = Path(settings.knowledge_dir)
-            
-            # Создаем инструменты
-            tools = create_kb_tools(vectorstore, knowledge_dir)
-            
+            tools = _init_tools()
+        except Exception as e:
+            print(f"Ошибка подключения к БД: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        _cli_run_tool(tools, tool_name, tool_args)
+
+    # ── list / help: сразу инициализируем ───────────────────────────
+    elif args.command in ('list', 'help'):
+        try:
+            tools = _init_tools()
         except Exception as e:
             print(f"Ошибка инициализации: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             sys.exit(1)
 
-    # Выполняем команду
-    if args.command == 'list':
-        if tools is None:
-            print("Ошибка: tools не инициализированы", file=sys.stderr)
-            sys.exit(1)
-        _cli_list_tools(tools)
-    
-    elif args.command == 'help':
-        if args.tool_name:
-            if tools is None:
-                print("Ошибка: tools не инициализированы", file=sys.stderr)
-                sys.exit(1)
-            _cli_help_tool(tools, args.tool_name)
+        if args.command == 'list':
+            _cli_list_tools(tools)
         else:
-            parser.print_help()
-    
-    elif args.command == 'run':
-        if tools is None:
-            print("Ошибка: tools не инициализированы", file=sys.stderr)
-            sys.exit(1)
-        # Парсим параметры в формате param=value
-        tool_args = {}
-        for param in args.params:
-            if '=' in param:
-                key, value = param.split('=', 1)
-                # Пробуем преобразовать в число
-                try:
-                    value = int(value)
-                except ValueError:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        # Пробуем распарсить как JSON для списков/объектов
-                        if value.startswith('[') or value.startswith('{'):
-                            try:
-                                value = json.loads(value)
-                            except:
-                                pass  # Оставляем строкой
-                tool_args[key] = value
-            else:
-                print(f"Предупреждение: пропущен параметр '{param}' (ожидается формат param=value)", file=sys.stderr)
-        
-        _cli_run_tool(tools, args.tool_name, tool_args)
-    
+            _cli_help_tool(tools, args.tool_name)
+
     else:
         parser.print_help()
         sys.exit(1)

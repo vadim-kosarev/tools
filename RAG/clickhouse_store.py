@@ -643,17 +643,27 @@ class ClickHouseVectorStore(VectorStore):
             List of (source, section, chunk_count) tuples.
             chunk_count = total number of chunks in that section.
         """
-        where_clauses = ["positionCaseInsensitiveUTF8(section, {name:String}) > 0"]
-        params: dict[str, Any] = {"name": name_substring}
+        # Разбиваем на слова и ищем каждое отдельно (AND, порядок не важен).
+        # "перечень сокращений" найдёт "Перечень принятых сокращений".
+        words = [w for w in name_substring.split() if w]
+        params: dict[str, Any] = {}
+        word_clauses = []
+        for i, word in enumerate(words):
+            key = f"w{i}"
+            params[key] = word
+            word_clauses.append(f"positionCaseInsensitiveUTF8(section, {{{key}:String}}) > 0")
+        # Если слов нет — fallback на пустой фильтр (вернёт всё)
+        where_clauses = [" AND ".join(word_clauses)] if word_clauses else []
 
         if source is not None:
             where_clauses.append("source = {src:String}")
             params["src"] = source
 
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1"
         sql = f"""
             SELECT source, section, count() AS chunk_count
             FROM {self._cfg.database}.{self._cfg.table} FINAL
-            WHERE {" AND ".join(where_clauses)}
+            WHERE {where_sql}
             GROUP BY source, section
             ORDER BY chunk_count DESC, source, section
         """
