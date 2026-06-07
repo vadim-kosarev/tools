@@ -294,6 +294,12 @@ def build_vectorstore(force_reindex: bool = False) -> ClickHouseVectorStore:
         logger.info(f"  Проиндексировано {indexed}/{len(valid_chunks)} чанков")
 
     logger.info(f"Индексация завершена: {indexed} чанков добавлено")
+
+    # Семантический индекс по НАЗВАНИЯМ секций (для find_relevant_sections STAGE 2)
+    logger.info("Построение индекса названий секций...")
+    sections_indexed = store.build_section_index()
+    logger.info(f"Индекс названий секций: {sections_indexed} секций")
+
     return store
 
 

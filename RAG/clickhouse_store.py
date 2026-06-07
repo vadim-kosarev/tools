@@ -33,6 +33,7 @@ Embeddings:
 """
 from __future__ import annotations
 
+import math
 import uuid
 import logging
 from typing import Any, Iterable, Optional
@@ -90,6 +91,19 @@ ORDER BY (source, section, chunk_type, cityHash64(content))
 """
 
 _DROP_TABLE_SQL = "DROP TABLE IF EXISTS {database}.{table}"
+
+# Таблица эмбеддингов НАЗВАНИЙ секций (для семантического поиска по названиям).
+# Заполняется отдельно через build_section_index() — обычно после реиндексации.
+_CREATE_SECTIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS {database}.{table}
+(
+    source    String,
+    section   String,
+    embedding Array(Float32)
+)
+ENGINE = ReplacingMergeTree()
+ORDER BY (source, section)
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +688,196 @@ class ClickHouseVectorStore(VectorStore):
             src, sec, cnt = row
             sections.append((src, sec if sec else "<root>", int(cnt)))
         return sections
+
+    # ── Section-name semantic index ──────────────────────────────────────────
+
+    def _sections_table_name(self) -> str:
+        """Имя таблицы эмбеддингов названий секций (<table>_sections)."""
+        return f"{self._cfg.table}_sections"
+
+    def section_index_count(self) -> int:
+        """Число строк в таблице эмбеддингов названий (0, если таблицы нет)."""
+        db, tbl_s = self._cfg.database, self._sections_table_name()
+        exists = self._client.query(f"EXISTS TABLE {db}.{tbl_s}").result_rows[0][0]
+        if not exists:
+            return 0
+        r = self._client.query(f"SELECT count() FROM {db}.{tbl_s} FINAL")
+        return int(r.first_row[0])
+
+    @staticmethod
+    def _has_nan(vec: list[float]) -> bool:
+        return any(math.isnan(x) for x in vec)
+
+    def _embed_one(self, text: str, retries: int = 3) -> Optional[list[float]]:
+        """Эмбеддит одну строку с ретраями. bge-m3 через Ollama изредка возвращает
+        NaN на повторяющихся быстрых запросах — ретрай обычно помогает."""
+        for _ in range(retries):
+            try:
+                vec = self._embedding.embed_query(text)
+                if not self._has_nan(vec):
+                    return vec
+            except Exception:
+                pass
+        return None
+
+    def build_section_index(self, batch_size: int = 100) -> int:
+        """(Пере)строить таблицу эмбеддингов НАЗВАНИЙ секций.
+
+        Удаляет и пересоздаёт <table>_sections, затем эмбеддит каждое уникальное
+        название (source, section) и сохраняет вектор. Запускать после реиндексации
+        основной таблицы чанков.
+
+        Эмбеддинг идёт пачками; если пачка падает или содержит NaN (флакость
+        Ollama/bge-m3), переключаемся на поэлементный режим с ретраями, безнадёжные
+        названия пропускаем.
+
+        Returns:
+            Количество проиндексированных секций.
+        """
+        db, tbl, tbl_s = self._cfg.database, self._cfg.table, self._sections_table_name()
+        self._client.command(_CREATE_DB_SQL.format(database=db))
+        self._client.command(f"DROP TABLE IF EXISTS {db}.{tbl_s}")
+        self._client.command(_CREATE_SECTIONS_TABLE_SQL.format(database=db, table=tbl_s))
+
+        rows_q = self._client.query(
+            f"SELECT DISTINCT source, section FROM {db}.{tbl} FINAL WHERE section != ''"
+        )
+        pairs = [(r[0], r[1]) for r in rows_q.result_rows]
+        if not pairs:
+            logger.warning("build_section_index: нет секций для индексации")
+            return 0
+
+        logger.info(f"build_section_index: эмбеддинг {len(pairs)} названий секций...")
+        inserted = 0
+        skipped = 0
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i:i + batch_size]
+            names = [normalize_for_embedding(sec).strip() or sec for _, sec in batch]
+            rows: list[list] = []
+            try:
+                vectors = self._embedding.embed_documents(names)
+                if any(self._has_nan(v) for v in vectors):
+                    raise ValueError("NaN в пачке")
+                rows = [[src, sec, vec] for (src, sec), vec in zip(batch, vectors)]
+            except Exception:
+                # Поэлементный fallback с ретраями
+                for (src, sec), name in zip(batch, names):
+                    vec = self._embed_one(name)
+                    if vec is None:
+                        skipped += 1
+                        logger.warning(f"build_section_index: пропуск секции [{src}] {sec[:60]!r}")
+                        continue
+                    rows.append([src, sec, vec])
+            if rows:
+                self._client.insert(
+                    f"{db}.{tbl_s}", rows,
+                    column_names=["source", "section", "embedding"],
+                )
+                inserted += len(rows)
+            logger.info(f"  {inserted}/{len(pairs)} секций проиндексировано")
+        if skipped:
+            logger.warning(f"build_section_index: пропущено {skipped} секций (эмбеддинг не удался)")
+        logger.info(f"build_section_index: готово, {inserted} секций")
+        return inserted
+
+    def similarity_search_sections(
+        self,
+        query: str,
+        k: int = 20,
+        source: Optional[str] = None,
+        max_distance: Optional[float] = None,
+    ) -> list[tuple[str, str, float]]:
+        """Семантический поиск по НАЗВАНИЯМ секций (не по содержимому).
+
+        Требует построенного индекса (build_section_index()). Запрос нормализуется
+        так же, как при индексации, и сравнивается косинусным расстоянием.
+
+        Args:
+            query:        Текст запроса.
+            k:            Сколько секций вернуть.
+            source:       Необязательный фильтр по имени файла.
+            max_distance: Если задано — отсеивать результаты с distance > порога.
+
+        Returns:
+            Список (source, section, distance), отсортированный по distance ASC.
+            Пустой список, если индекс не построен.
+        """
+        db, tbl_s = self._cfg.database, self._sections_table_name()
+        exists = self._client.query(f"EXISTS TABLE {db}.{tbl_s}").result_rows[0][0]
+        if not exists:
+            logger.warning(
+                f"similarity_search_sections: таблица {db}.{tbl_s} не найдена — "
+                f"постройте индекс: python kb_tools.py build-section-index"
+            )
+            return []
+
+        query_vec = self._embedding.embed_query(normalize_for_embedding(query))
+        params: dict[str, Any] = {"query_vec": query_vec, "k": k}
+        where = ""
+        if source is not None:
+            where = "WHERE source = {src:String}"
+            params["src"] = source
+        sql = f"""
+            SELECT source, section,
+                   cosineDistance(embedding, {{query_vec:Array(Float32)}}) AS distance
+            FROM {db}.{tbl_s} FINAL
+            {where}
+            ORDER BY distance ASC
+            LIMIT {{k:UInt32}}
+        """
+        result = self._client.query(sql, parameters=params)
+        out: list[tuple[str, str, float]] = []
+        for src, sec, dist in result.result_rows:
+            d = float(dist)
+            if max_distance is not None and d > max_distance:
+                continue
+            out.append((src, sec if sec else "<root>", d))
+        return out
+
+    def fuzzy_search_sections(
+        self,
+        query: str,
+        k: int = 10,
+        source: Optional[str] = None,
+        max_distance: Optional[float] = None,
+    ) -> list[tuple[str, str, float]]:
+        """Нечёткий поиск по НАЗВАНИЯМ секций (ngram, устойчив к опечаткам).
+
+        Использует ngramDistanceCaseInsensitiveUTF8 по столбцу section напрямую,
+        предвычислений не требует. distance в [0..1], меньше — ближе.
+
+        Args:
+            query:        Текст запроса (возможно с опечатками).
+            k:            Сколько секций вернуть.
+            source:       Необязательный фильтр по имени файла.
+            max_distance: Если задано — отсеивать результаты с distance > порога.
+
+        Returns:
+            Список (source, section, distance), отсортированный по distance ASC.
+        """
+        db, tbl = self._cfg.database, self._cfg.table
+        params: dict[str, Any] = {"q": query, "k": k}
+        where = "WHERE section != ''"
+        if source is not None:
+            where += " AND source = {src:String}"
+            params["src"] = source
+        sql = f"""
+            SELECT source, section,
+                   ngramDistanceCaseInsensitiveUTF8(section, {{q:String}}) AS distance
+            FROM {db}.{tbl} FINAL
+            {where}
+            GROUP BY source, section
+            ORDER BY distance ASC
+            LIMIT {{k:UInt32}}
+        """
+        result = self._client.query(sql, parameters=params)
+        out: list[tuple[str, str, float]] = []
+        for src, sec, dist in result.result_rows:
+            d = float(dist)
+            if max_distance is not None and d > max_distance:
+                continue
+            out.append((src, sec if sec else "<root>", d))
+        return out
 
 
     def get_sample(

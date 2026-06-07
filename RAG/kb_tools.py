@@ -12,7 +12,7 @@ LangChain Tools для доступа к базе знаний в ClickHouse.
   exact_search_in_file_section — точный поиск в конкретном разделе файла
   multi_term_exact_search    — точный поиск по списку терминов с ранжированием по покрытию
   find_sections_by_term      — поиск разделов содержащих термин (возвращает список source+section)
-  find_relevant_sections     — двухэтапный поиск: по названию раздела + по терминам в содержимом
+  find_relevant_sections     — поиск разделов: название (подстрока) + семантика + опечатки (ngram) + термины
   regex_search               — regex-поиск по исходным .md файлам с контекстом
   find_abbreviation_expansion — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
   read_table                 — чтение строк таблицы по разделу
@@ -82,8 +82,9 @@ class SectionInfo(BaseModel):
     """Информация о разделе"""
     source: str = Field(description="Имя файла")
     section: str = Field(description="Название раздела")
-    match_count: int = Field(description="Количество упоминаний/чанков")
-    match_type: Optional[str] = Field(default=None, description="Тип совпадения: NAME или CONTENT")
+    match_count: int = Field(description="Релевантность: число чанков (NAME/CONTENT) или score 0-100 (SEMANTIC)")
+    match_type: Optional[str] = Field(default=None, description="Тип совпадения: NAME, SEMANTIC или CONTENT")
+    score: Optional[float] = Field(default=None, description="Косинусная близость названия к запросу 0..1 (только SEMANTIC)")
 
 
 class SearchChunksResult(BaseModel):
@@ -450,6 +451,14 @@ _SEMANTIC_TOP_K = 10
 _EXACT_LIMIT = 30
 _REGEX_MAX = 50
 
+# Пороги для поиска по названиям секций (подобраны по реальным замерам корпуса).
+# SEMANTIC — косинусное расстояние эмбеддингов (синонимы): цель «аббревиатуры»
+#   → «Перечень принятых сокращений» = 0.53, шум начинается ~0.58.
+# FUZZY — ngramDistance (опечатки): цель «соркащения» → «...сокращений» = 0.76,
+#   синонимы дают шум ~0.90, поэтому порог между ними.
+_SECTION_SEMANTIC_MAX_DISTANCE = 0.58
+_SECTION_FUZZY_MAX_DISTANCE = 0.82
+
 
 class SemanticSearchInput(BaseModel):
     query: str = Field(description="Query text for semantic similarity search (in Russian or English)")
@@ -585,13 +594,25 @@ class FindSectionsByTermInput(BaseModel):
 
 
 class FindRelevantSectionsInput(BaseModel):
-    query: str = Field(description="User query phrase (for section name matching)")
+    query: str = Field(description="User query phrase (section name matching + semantic content search)")
     exact_terms: list[str] = Field(
         description="List of exact terms to search in content (for content matching)",
         default_factory=list
     )
     limit: int = Field(default=50, description="Maximum number of sections to return in results", ge=1, le=200)
     source: Optional[str] = Field(default=None, description="Optional: filter by source filename")
+    semantic_top_k: int = Field(
+        default=15,
+        description="Number of top sections for semantic stage (handles synonyms)",
+        ge=1,
+        le=200
+    )
+    fuzzy_top_k: int = Field(
+        default=10,
+        description="Number of top sections for fuzzy ngram stage (handles typos)",
+        ge=1,
+        le=200
+    )
 
 
 # Реестр схем: tool_name → Input-класс. Используется для pre-init валидации в CLI.
@@ -1035,52 +1056,75 @@ def create_kb_tools(
         query: str,
         exact_terms: list[str] = None,
         limit: int = 50,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        semantic_top_k: int = 15,
+        fuzzy_top_k: int = 10,
     ) -> SearchSectionsResult:
         """
-        Двухэтапная стратегия поиска релевантных разделов:
+        Четырёхэтапная стратегия поиска релевантных разделов по запросу.
 
-        ЭТАП 1: поиск по НАЗВАНИЮ раздела — находит разделы, чей заголовок совпадает с запросом.
-        ЭТАП 2: поиск по СОДЕРЖИМОМУ — находит разделы, содержащие точные термины.
+        ЭТАП 1 (NAME):     подстроковый поиск query в названиях разделов (по словам, AND).
+        ЭТАП 2 (SEMANTIC): семантика по НАЗВАНИЯМ секций — синонимы
+                           ("аббревиатуры" → "Перечень принятых сокращений").
+        ЭТАП 3 (FUZZY):    нечёткое (ngram) сравнение НАЗВАНИЙ — опечатки
+                           ("соркащения" → "Перечень принятых сокращений").
+        ЭТАП 4 (CONTENT):  разделы, содержащие exact_terms (подстрока в содержимом).
 
-        Результаты объединяются и приоритизируются:
-        - разделы, совпавшие по НАЗВАНИЮ, помечаются match_type="NAME";
-        - разделы, совпавшие по СОДЕРЖИМОМУ, — match_type="CONTENT";
-        - дубликаты объединяются с общими метаданными.
+        Приоритет при объединении: NAME > SEMANTIC > FUZZY > CONTENT.
 
-        Лучше всего для: всестороннего поиска разделов по заголовку и содержимому одновременно.
-        Используйте как ОСНОВНОЙ инструмент, когда нужно найти все релевантные разделы.
+        Лучше всего для: всестороннего поиска разделов, когда точное название неизвестно
+        (синонимы, словоформы, опечатки). ОСНОВНОЙ инструмент поиска разделов.
 
         Аргументы:
-            query: фраза запроса пользователя (ищется в названиях разделов)
+            query: фраза запроса (название раздела, синоним или с опечаткой)
             exact_terms: список точных терминов для поиска в содержимом (необязательно)
             limit: максимальное число возвращаемых разделов (по умолчанию 50)
             source: необязательный фильтр по имени файла
+            semantic_top_k: размер выборки семантического этапа (по умолчанию 15)
+            fuzzy_top_k: размер выборки нечёткого этапа (по умолчанию 10)
 
         Возвращает:
-            SearchSectionsResult: запрос, топ-N разделов с приоритетом NAME > CONTENT, счётчики
+            SearchSectionsResult: топ-N разделов с приоритетом NAME > SEMANTIC > FUZZY > CONTENT.
+            Для SEMANTIC/FUZZY поле score = близость названия к запросу (0..1, больше — ближе).
         """
         if exact_terms is None:
             exact_terms = []
-        
+
         filter_info = []
         if source:
             filter_info.append(f"file={source}")
         filter_str = f" [{', '.join(filter_info)}]" if filter_info else ""
-        
+
         logger.debug(
             f"Tool find_relevant_sections: query='{query}'{filter_str}, "
-            f"exact_terms={exact_terms}, limit={limit}"
+            f"exact_terms={exact_terms}, limit={limit}, "
+            f"semantic_top_k={semantic_top_k}, fuzzy_top_k={fuzzy_top_k}"
         )
         rec = _db_request(
             "DB:find_relevant_sections",
             f"query={query!r}\nexact_terms={exact_terms}\nlimit={limit}{filter_str}",
         )
-        
-        # STAGE 1: Search by section NAME
+
+        # STAGE 1: поиск по НАЗВАНИЮ раздела (подстрока)
         name_sections = vectorstore.clone().find_sections_by_name(query, source=source)
-        
-        # STAGE 2: Search by CONTENT (exact terms)
+
+        # STAGE 2: СЕМАНТИЧЕСКИЙ поиск по НАЗВАНИЯМ секций (синонимы)
+        semantic_sections: list[tuple[str, str, float]] = []
+        if query:
+            semantic_sections = vectorstore.clone().similarity_search_sections(
+                query, k=semantic_top_k, source=source,
+                max_distance=_SECTION_SEMANTIC_MAX_DISTANCE,
+            )
+
+        # STAGE 3: НЕЧЁТКИЙ (ngram) поиск по НАЗВАНИЯМ секций (опечатки)
+        fuzzy_sections: list[tuple[str, str, float]] = []
+        if query:
+            fuzzy_sections = vectorstore.clone().fuzzy_search_sections(
+                query, k=fuzzy_top_k, source=source,
+                max_distance=_SECTION_FUZZY_MAX_DISTANCE,
+            )
+
+        # STAGE 4: поиск по СОДЕРЖИМОМУ (exact_terms)
         content_sections: list[tuple[str, str, int]] = []
         if exact_terms:
             for term in exact_terms:
@@ -1088,73 +1132,79 @@ def create_kb_tools(
                     term, limit=500, chunk_type=None, source=source
                 )
                 content_sections.extend(term_sections)
-        
-        # Merge results: (source, section) -> metadata
-        from collections import defaultdict as _dd
+
+        # Merge: (source, section) → meta; приоритет NAME > SEMANTIC > FUZZY > CONTENT (первый выигрывает).
+        # sort_val — ключ упорядочивания ВНУТРИ типа: для NAME/CONTENT это -match_count (больше лучше),
+        # для SEMANTIC/FUZZY это distance (меньше лучше). Сравнивается только внутри одного приоритета.
         section_map: dict[tuple[str, str], dict] = {}
-        
-        # Add name matches
+
         for src, sec, chunk_count in name_sections:
-            key = (src, sec)
-            section_map[key] = {
-                "match_type": "NAME",
-                "chunk_count": chunk_count,
-                "term_counts": {}
+            section_map[(src, sec)] = {
+                "match_type": "NAME", "match_count": chunk_count, "score": None, "sort_val": -chunk_count,
             }
-        
-        # Add/merge content matches
+
+        for src, sec, dist in semantic_sections:
+            key = (src, sec)
+            if key not in section_map:
+                section_map[key] = {
+                    "match_type": "SEMANTIC",
+                    "match_count": round((1.0 - dist) * 100),
+                    "score": round(1.0 - dist, 4),
+                    "sort_val": dist,
+                }
+
+        for src, sec, dist in fuzzy_sections:
+            key = (src, sec)
+            if key not in section_map:
+                section_map[key] = {
+                    "match_type": "FUZZY",
+                    "match_count": round((1.0 - dist) * 100),
+                    "score": round(1.0 - dist, 4),
+                    "sort_val": dist,
+                }
+
         for src, sec, match_count in content_sections:
             key = (src, sec)
-            if key in section_map:
-                # Already found by name - add term info
-                section_map[key]["term_counts"][src] = section_map[key]["term_counts"].get(src, 0) + match_count
-            else:
-                # New section from content search
+            if key not in section_map:
                 section_map[key] = {
-                    "match_type": "CONTENT",
-                    "chunk_count": 0,
-                    "term_counts": {src: match_count}
+                    "match_type": "CONTENT", "match_count": match_count, "score": None, "sort_val": -match_count,
                 }
-        
-        # Sort all sections by priority: NAME first, then by term count
-        all_sections = []
-        for (src, sec), meta in section_map.items():
-            priority = 0 if meta["match_type"] == "NAME" else 1
-            term_count = sum(meta["term_counts"].values())
-            match_count = meta["chunk_count"] if meta["match_type"] == "NAME" else term_count
-            all_sections.append((priority, -term_count, src, sec, meta["match_type"], match_count))
-        
-        all_sections.sort()
-        
-        # Apply LIMIT - take only top N sections
-        top_sections = all_sections[:limit]
-        
-        # Конвертация в структурированный результат
+
+        # Сортировка: NAME=0, SEMANTIC=1, FUZZY=2, CONTENT=3; внутри типа по sort_val ASC
+        _PRIORITY = {"NAME": 0, "SEMANTIC": 1, "FUZZY": 2, "CONTENT": 3}
+        ranked = sorted(
+            section_map.items(),
+            key=lambda kv: (_PRIORITY[kv[1]["match_type"]], kv[1]["sort_val"], kv[0][0], kv[0][1]),
+        )
+        top_sections = ranked[:limit]
+
         section_infos = [
             SectionInfo(
-                source=src,
-                section=sec,
-                match_count=match_count,
-                match_type=match_type
+                source=src, section=sec,
+                match_count=meta["match_count"], match_type=meta["match_type"], score=meta["score"],
             )
-            for priority, neg_count, src, sec, match_type, match_count in top_sections
+            for (src, sec), meta in top_sections
         ]
-        
+
+        name_cnt = sum(1 for s in section_infos if s.match_type == "NAME")
+        sem_cnt  = sum(1 for s in section_infos if s.match_type == "SEMANTIC")
+        fuz_cnt  = sum(1 for s in section_infos if s.match_type == "FUZZY")
+        cont_cnt = sum(1 for s in section_infos if s.match_type == "CONTENT")
+
         result = SearchSectionsResult(
             query=query,
             sections=section_infos,
             total_found=len(section_map),
             returned_count=len(section_infos)
         )
-        
+
         # Логирование
         if rec:
             rec.set_response(result.model_dump_json(indent=2))
         logger.info(
             f"find_relevant_sections '{query}'{filter_str}: "
             f"найдено {result.total_found} разделов, возвращено топ-{result.returned_count} "
-            f"({len(name_sections)} по названию, "
-            f"{len(set((s, sec) for s, sec, _ in content_sections))} по содержимому)"
+            f"({name_cnt} назв., {sem_cnt} семант., {fuz_cnt} нечётк., {cont_cnt} содерж.)"
         )
         
         return result
@@ -1887,7 +1937,7 @@ def get_tool_registry() -> dict[str, str]:
         "exact_search_in_file_section": "Точный поиск в конкретном разделе файла",
         "multi_term_exact_search": "Поиск по нескольким терминам с ранжированием (автоудаление дубликатов)",
         "find_sections_by_term": "Поиск разделов содержащих термин (возвращает список source+section)",
-        "find_relevant_sections": "Двухэтапный поиск: по названию раздела + по терминам в содержимом",
+        "find_relevant_sections": "Поиск разделов: название + семантика (синонимы) + ngram (опечатки) + термины",
         "regex_search": "Поиск по regex-паттернам (IP, порты, VLAN)",
         "find_abbreviation_expansion": "Поиск расшифровки аббревиатур (КЦОИ, RAM, API)",
         "read_table": "Чтение строк таблицы по названию раздела",
@@ -2053,6 +2103,9 @@ def main():
   python kb_tools.py run semantic_search query="что такое RAG" top_k=5
   python kb_tools.py run find_abbreviation_expansion abbreviation="AK47"
 
+  # Построить индекс названий секций (после реиндексации)
+  python kb_tools.py build-section-index
+
 Формат параметров: param=value (числа автоматически конвертируются)
         """
     )
@@ -2070,6 +2123,12 @@ def main():
     run_parser = subparsers.add_parser('run', help='Запустить инструмент')
     run_parser.add_argument('tool_name', help='Название инструмента')
     run_parser.add_argument('params', nargs='*', help='Параметры в формате param=value')
+
+    # Команда build-section-index
+    subparsers.add_parser(
+        'build-section-index',
+        help='Построить таблицу эмбеддингов названий секций (для семантики по названиям)',
+    )
     
     # Парсим аргументы
     if len(sys.argv) == 1:
@@ -2153,6 +2212,20 @@ def main():
             traceback.print_exc()
             sys.exit(1)
         _cli_run_tool(tools, tool_name, tool_args)
+
+    # ── build-section-index: строим индекс названий секций ──────────
+    elif args.command == 'build-section-index':
+        from rag_chat import build_vectorstore
+        print("Инициализация vectorstore...", file=sys.stderr)
+        try:
+            vectorstore = build_vectorstore()
+            count = vectorstore.build_section_index()
+        except Exception as e:
+            print(f"Ошибка построения индекса: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        print(f"Индекс названий секций построен: {count} секций.")
 
     # ── list / help: сразу инициализируем ───────────────────────────
     elif args.command in ('list', 'help'):

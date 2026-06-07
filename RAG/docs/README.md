@@ -40,6 +40,15 @@ MCP-клиент (Continue.dev, Claude Code, ...)
 | `table_headers` | Array(String) | Заголовки таблицы (если chunk_type = "table") |
 | `embedding` | Array(Float32) | Вектор эмбеддинга (1024 dim, bge-m3) |
 
+Сопутствующая таблица `soib_kcoi_v2.chunks_sections` (эмбеддинги НАЗВАНИЙ секций
+для семантического поиска по заголовкам):
+
+| Колонка | Тип | Описание |
+|---------|-----|---------|
+| `source` | String | Имя файла-источника |
+| `section` | String | Путь раздела (H1 > H2 > H3) |
+| `embedding` | Array(Float32) | Эмбеддинг названия раздела (1024 dim, bge-m3) |
+
 ## Индексация
 
 Процесс загрузки документов в ClickHouse:
@@ -52,12 +61,34 @@ MCP-клиент (Continue.dev, Claude Code, ...)
 python rag_chat.py --reindex
 ```
 
+После реиндексации автоматически строится индекс названий секций
+(таблица `chunks_sections`). Его можно пересобрать отдельно:
+
+```powershell
+python kb_tools.py build-section-index
+```
+
 ## Инструменты: справочник по типам поиска
 
 ### Семантический (по смыслу)
-`semantic_search`, `find_relevant_sections`
+`semantic_search`
 
-Используют cosineDistance по полю `embedding`.
+Использует cosineDistance по полю `embedding` (поиск по содержимому чанков).
+
+### Поиск разделов (многоэтапный)
+`find_relevant_sections`
+
+Объединяет четыре сигнала с приоритетом NAME > SEMANTIC > FUZZY > CONTENT:
+
+| Этап | Механизм | Ловит |
+|------|----------|-------|
+| NAME | подстрока по словам (`positionCaseInsensitiveUTF8`) | точное вхождение в названии |
+| SEMANTIC | cosineDistance по `chunks_sections` (эмбеддинги названий) | синонимы («аббревиатуры» → «...сокращений») |
+| FUZZY | `ngramDistanceCaseInsensitiveUTF8` по названиям | опечатки («соркащения» → «...сокращений») |
+| CONTENT | подстрока по содержимому (`exact_terms`) | разделы с конкретными терминами |
+
+Пороги отсечения шума заданы константами в `kb_tools.py`
+(`_SECTION_SEMANTIC_MAX_DISTANCE`, `_SECTION_FUZZY_MAX_DISTANCE`).
 
 ### Точный (по подстроке)
 `exact_search`, `exact_search_in_file`, `exact_search_in_file_section`, `multi_term_exact_search`
