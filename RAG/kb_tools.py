@@ -693,20 +693,20 @@ def create_kb_tools(
         section: Optional[str] = None
     ) -> SearchChunksResult:
         """
-        Semantic similarity search in the knowledge base using vector embeddings (bge-m3).
-        Best for: conceptual questions, 'what is X', 'how does Y work', broad topic search.
-        Returns top-K most semantically similar text chunks from ClickHouse.
-        By default searches only in prose chunks (chunk_type=""), not in full tables.
-        Metadata includes: source file, section breadcrumb, line_start for context expansion.
-        Each result includes score (cosine distance) indicating relevance (lower = more similar).
+        Семантический поиск по базе знаний с помощью векторных эмбеддингов (bge-m3).
+        Лучше всего для: концептуальных вопросов, «что такое X», «как работает Y», широкого поиска по теме.
+        Возвращает top-K наиболее семантически близких текстовых чанков из ClickHouse.
+        По умолчанию ищет только в текстовых чанках (chunk_type=""), не в полных таблицах.
+        Метаданные включают: исходный файл, breadcrumb раздела, line_start для расширения контекста.
+        Каждый результат содержит score (косинусное расстояние) — релевантность (меньше = ближе).
 
-        Optional filters:
-        - chunk_type: filter by chunk type (default: "" for prose only)
-        - source: limit search to specific file (e.g. 'servers.md')
-        - section: limit search to specific section substring
-        
-        Returns:
-            SearchChunksResult with query, list of chunks with metadata and scores, and total_found count
+        Необязательные фильтры:
+        - chunk_type: фильтр по типу чанка (по умолчанию "" — только проза)
+        - source: ограничить поиск конкретным файлом (например, 'servers.md')
+        - section: ограничить поиск подстрокой названия раздела
+
+        Возвращает:
+            SearchChunksResult: запрос, список чанков с метаданными и score, и количество total_found
         """
         filter_info = []
         if chunk_type:
@@ -749,23 +749,23 @@ def create_kb_tools(
         section: Optional[str] = None
     ) -> SearchChunksResult:
         """
-        Case-insensitive exact substring search in knowledge base content (positionCaseInsensitive).
-        Best for: specific terms, abbreviations, system names, section titles.
-        By default searches only in prose chunks (chunk_type=""), not in full tables.
-        Use chunk_type='table_row' to search only within table data (each row = separate chunk).
-        Use chunk_type='table_full' to get complete tables.
-        Each result includes source file, section breadcrumb, and line_start for neighbor expansion.
+        Точный регистронезависимый поиск подстроки в содержимом базы знаний (positionCaseInsensitiveUTF8).
+        Лучше всего для: конкретных терминов, аббревиатур, названий систем, заголовков разделов.
+        По умолчанию ищет только в текстовых чанках (chunk_type=""), не в полных таблицах.
+        chunk_type='table_row' — искать только в данных таблиц (каждая строка = отдельный чанк).
+        chunk_type='table_full' — получить таблицы целиком.
+        Каждый результат содержит исходный файл, breadcrumb раздела и line_start для расширения контекста.
 
-        Optional filters:
-        - chunk_type: filter by chunk type (default: "" for prose only)
-        - source: limit search to specific file (e.g. 'servers.md')
-        - section: limit search to specific section substring
+        Необязательные фильтры:
+        - chunk_type: фильтр по типу чанка (по умолчанию "" — только проза)
+        - source: ограничить поиск конкретным файлом (например, 'servers.md')
+        - section: ограничить поиск подстрокой названия раздела
 
-        When both source and section are provided, performs highly targeted search
-        (equivalent to exact_search_in_file_section).
-        
-        Returns:
-            SearchChunksResult with substring as query, list of chunks, and total_found count
+        Если заданы и source, и section, выполняется максимально точечный поиск
+        (эквивалент exact_search_in_file_section).
+
+        Возвращает:
+            SearchChunksResult: подстрока как запрос, список чанков и количество total_found
         """
         filter_info = []
         if source:
@@ -808,15 +808,15 @@ def create_kb_tools(
         chunk_type: Optional[str] = None
     ) -> SearchChunksResult:
         """
-        Case-insensitive exact substring search within a specific file.
-        Best for: focused search when you know the exact file name, narrowing down results
-        to a specific document, avoiding noise from other files.
-        Use list_sources first to find available filenames.
-        Returns chunks from the specified file only, sorted by line number.
-        Each result includes section breadcrumb and line_start for neighbor expansion.
-        
-        Returns:
-            SearchChunksResult with substring as query, chunks from specified file, total_found count
+        Точный регистронезависимый поиск подстроки в пределах конкретного файла.
+        Лучше всего для: сфокусированного поиска, когда известно точное имя файла; сужения
+        результатов до одного документа и отсечения шума из других файлов.
+        Сначала используйте list_sources, чтобы узнать доступные имена файлов.
+        Возвращает чанки только из указанного файла, отсортированные по номеру строки.
+        Каждый результат содержит breadcrumb раздела и line_start для расширения контекста.
+
+        Возвращает:
+            SearchChunksResult: подстрока как запрос, чанки из указанного файла, количество total_found
         """
         logger.debug(f"Tool exact_search_in_file: substring='{substring}', file='{source_file}'")
         rec = _db_request(
@@ -853,15 +853,15 @@ def create_kb_tools(
         chunk_type: Optional[str] = None
     ) -> SearchChunksResult:
         """
-        Case-insensitive exact substring search within a specific section of a specific file.
-        Best for: highly targeted search when you know both the file and section,
-        finding specific data in known documentation structure (e.g. IP in 'Servers > Database').
-        Use list_sections first to find exact section names.
-        Returns chunks matching file + section + substring, sorted by line number.
-        Most precise search tool — minimal noise, maximum relevance.
-        
-        Returns:
-            SearchChunksResult with substring as query, chunks from specified section, total_found count
+        Точный регистронезависимый поиск подстроки в конкретном разделе конкретного файла.
+        Лучше всего для: максимально точечного поиска, когда известны и файл, и раздел;
+        поиска конкретных данных в известной структуре документации (например, IP в 'Servers > Database').
+        Сначала используйте list_sections, чтобы узнать точные названия разделов.
+        Возвращает чанки, совпавшие по файлу + разделу + подстроке, отсортированные по номеру строки.
+        Самый точный поисковый инструмент — минимум шума, максимум релевантности.
+
+        Возвращает:
+            SearchChunksResult: подстрока как запрос, чанки из указанного раздела, количество total_found
         """
         logger.debug(
             f"Tool exact_search_in_file_section: substring='{substring}', "
@@ -904,26 +904,26 @@ def create_kb_tools(
         section: Optional[str] = None
     ) -> MultiTermSearchResult:
         """
-        Multi-term exact search ranked by the number of matching terms per chunk.
-        By default searches only in prose chunks (chunk_type=""), not in full tables.
+        Многотерминный точный поиск с ранжированием по числу совпавших терминов в чанке.
+        По умолчанию ищет только в текстовых чанках (chunk_type=""), не в полных таблицах.
 
-        Searches all given terms simultaneously across the knowledge base.
-        Each chunk is assigned a match_count = number of terms found in its content.
-        Results are sorted: ALL terms matched first, then most terms, then fewer.
+        Ищет все переданные термины одновременно по всей базе знаний.
+        Каждому чанку присваивается match_count = число найденных в нём терминов.
+        Результаты сортируются: сначала чанки со ВСЕМИ терминами, затем с большим их числом, затем с меньшим.
 
-        Use this as the FIRST exact-search step when you have multiple key terms —
-        it finds the most relevant chunks (highest term coverage) in a single call.
-        For terms not covered by the top results, follow up with individual exact_search.
+        Используйте это как ПЕРВЫЙ шаг точного поиска, когда есть несколько ключевых терминов —
+        за один вызов находит наиболее релевантные чанки (с максимальным покрытием терминов).
+        Для терминов, не покрытых верхними результатами, добавьте отдельные вызовы exact_search.
 
-        Returns results grouped by match_count (coverage) with chunks sorted by relevance.
-        
-        Optional filters:
-        - chunk_type: filter by chunk type (default: "" for prose only)
-        - source: limit search to specific file (e.g. 'servers.md')
-        - section: limit search to specific section substring
-        
-        Returns:
-            MultiTermSearchResult with terms, chunks_by_coverage dict, total_chunks, and max_coverage
+        Возвращает результаты, сгруппированные по match_count (покрытию), с чанками по релевантности.
+
+        Необязательные фильтры:
+        - chunk_type: фильтр по типу чанка (по умолчанию "" — только проза)
+        - source: ограничить поиск конкретным файлом (например, 'servers.md')
+        - section: ограничить поиск подстрокой названия раздела
+
+        Возвращает:
+            MultiTermSearchResult: термины, словарь chunks_by_coverage, total_chunks и max_coverage
         """
         # Дедупликация терминов (удаление повторяющихся)
         unique_terms = list(dict.fromkeys(terms))  # Сохраняет порядок
@@ -992,23 +992,23 @@ def create_kb_tools(
         source: Optional[str] = None
     ) ->SearchSectionsResult:
         """
-        Find all unique sections (source + section) containing exact substring matches.
-        
-        Best for: discovering which sections contain specific terms before diving deep.
-        Returns a list of (source, section) pairs with match counts, sorted by relevance.
-        Use this to identify the most relevant sections, then use exact_search or
-        get_section_content to get detailed information.
-        
-        This scans up to 'limit' chunks and returns ALL unique sections found within
-        that scan. For example, with limit=100 searching "PostgreSQL", you'll get
-        all sections that mention PostgreSQL within the first 100 matching chunks.
-        
-        Optional filters:
-        - source: limit search to specific file
-        - chunk_type: filter by chunk type
-        
-        Returns:
-            SearchSectionsResult with substring as query, list of sections with counts, total_found
+        Найти все уникальные разделы (source + section), содержащие точные совпадения подстроки.
+
+        Лучше всего для: выяснения, в каких разделах встречаются конкретные термины, перед углублением.
+        Возвращает список пар (source, section) со счётчиками совпадений, отсортированный по релевантности.
+        Используйте, чтобы выявить наиболее релевантные разделы, затем берите детали через exact_search
+        или get_section_content.
+
+        Сканирует до 'limit' чанков и возвращает ВСЕ уникальные разделы, найденные в пределах
+        этого сканирования. Например, при limit=100 и поиске "PostgreSQL" вы получите все разделы,
+        упоминающие PostgreSQL, в пределах первых 100 совпавших чанков.
+
+        Необязательные фильтры:
+        - source: ограничить поиск конкретным файлом
+        - chunk_type: фильтр по типу чанка
+
+        Возвращает:
+            SearchSectionsResult: подстрока как запрос, список разделов со счётчиками, total_found
         """
         filter_info = []
         if source:
@@ -1066,27 +1066,27 @@ def create_kb_tools(
         source: Optional[str] = None
     ) -> SearchSectionsResult:
         """
-        Two-stage search strategy for finding relevant sections:
-        
-        STAGE 1: Search by section NAME - finds sections whose title matches the query
-        STAGE 2: Search by CONTENT - finds sections containing exact terms
-        
-        Results are combined and prioritized:
-        - Sections matching by NAME are marked with match_type="NAME"
-        - Sections matching by CONTENT have match_type="CONTENT"
-        - Duplicates are merged with combined metadata
-        
-        Best for: comprehensive section discovery matching both title and content.
-        Use this as the PRIMARY search tool when you need to find all relevant sections.
-        
-        Args:
-            query: User query phrase (searched in section names)
-            exact_terms: List of exact terms to search in content (optional)
-            limit: Maximum number of sections to return (default 50)
-            source: Optional source file filter
-        
-        Returns:
-            SearchSectionsResult with query, top-N sections prioritized by NAME > CONTENT, counts
+        Двухэтапная стратегия поиска релевантных разделов:
+
+        ЭТАП 1: поиск по НАЗВАНИЮ раздела — находит разделы, чей заголовок совпадает с запросом.
+        ЭТАП 2: поиск по СОДЕРЖИМОМУ — находит разделы, содержащие точные термины.
+
+        Результаты объединяются и приоритизируются:
+        - разделы, совпавшие по НАЗВАНИЮ, помечаются match_type="NAME";
+        - разделы, совпавшие по СОДЕРЖИМОМУ, — match_type="CONTENT";
+        - дубликаты объединяются с общими метаданными.
+
+        Лучше всего для: всестороннего поиска разделов по заголовку и содержимому одновременно.
+        Используйте как ОСНОВНОЙ инструмент, когда нужно найти все релевантные разделы.
+
+        Аргументы:
+            query: фраза запроса пользователя (ищется в названиях разделов)
+            exact_terms: список точных терминов для поиска в содержимом (необязательно)
+            limit: максимальное число возвращаемых разделов (по умолчанию 50)
+            source: необязательный фильтр по имени файла
+
+        Возвращает:
+            SearchSectionsResult: запрос, топ-N разделов с приоритетом NAME > CONTENT, счётчики
         """
         if exact_terms is None:
             exact_terms = []
@@ -1191,12 +1191,13 @@ def create_kb_tools(
     @tool(args_schema=RegexSearchInput)
     def regex_search(pattern: str, max_results: int = regex_max_results) -> RegexSearchResult:
         """
-        Regex pattern search directly in source .md files with surrounding context lines.
-        Best for: IP addresses, port numbers, VLAN IDs, document codes, subnet masks, any structured patterns.
-        Each match includes file name, line number, matched text, and context lines around the match.
+        Поиск по regex-паттерну напрямую в исходных .md-файлах с выводом окружающих строк контекста.
+        Лучше всего для: IP-адресов, номеров портов, VLAN ID, кодов документов, масок подсетей,
+        любых структурированных паттернов.
+        Каждое совпадение содержит имя файла, номер строки, найденный текст и строки контекста вокруг.
 
-        Returns:
-            RegexSearchResult with pattern, list of matches with context, and total_matches count
+        Возвращает:
+            RegexSearchResult: паттерн, список совпадений с контекстом и количество total_matches
         """
         logger.debug(f"Tool regex_search: pattern='{pattern}'")
         rec = _db_request("DB:regex_search", f"pattern={pattern!r}\nmax_results={max_results}")
@@ -1298,27 +1299,27 @@ def create_kb_tools(
         max_results: int = regex_max_results
     ) -> AbbreviationExpansionResult:
         """
-        Find expansions (расшифровки) of abbreviations in knowledge base.
+        Найти расшифровки аббревиатур в базе знаний.
 
-        Searches for sequences of words where each word starts with the corresponding letter
-        from the abbreviation. Works for both Cyrillic and Latin abbreviations.
-        Supports digits in abbreviations (e.g., AK47, T34).
+        Ищет последовательности слов, где каждое слово начинается с соответствующей буквы
+        аббревиатуры. Работает и с кириллическими, и с латинскими аббревиатурами.
+        Поддерживает цифры в аббревиатурах (например, AK47, T34).
 
-        Best for: finding full names of acronyms (RAM, API, AK47, etc.)
+        Лучше всего для: поиска полных названий сокращений (RAM, API, AK47 и т.п.).
 
-        Examples:
-            КЦОИ -> finds расшифровки с чанками
-            RAM  -> finds ["Random Access Memory"] with chunks
-            API  -> finds ["Application Programming Interface"] with chunks
-            AK47 -> finds ["Автомат Калашникова 47"] with chunks
-            T34  -> finds ["Танк 34"] with chunks
+        Примеры:
+            КЦОИ -> находит расшифровки с чанками
+            RAM  -> находит ["Random Access Memory"] с чанками
+            API  -> находит ["Application Programming Interface"] с чанками
+            AK47 -> находит ["Автомат Калашникова 47"] с чанками
+            T34  -> находит ["Танк 34"] с чанками
 
-        The tool automatically generates a regex pattern:
-            - Letters -> words starting with those letters (case-insensitive)
-            - Digits -> exact match (as is)
+        Инструмент автоматически строит regex-паттерн:
+            - буквы -> слова, начинающиеся с этих букв (без учёта регистра);
+            - цифры -> точное совпадение (как есть).
 
-        Returns:
-            AbbreviationExpansionResult with abbreviation, list of expansions with chunks, total count, and pattern
+        Возвращает:
+            AbbreviationExpansionResult: аббревиатура, список расшифровок с чанками, общее число и паттерн
         """
         logger.debug(f"Tool find_abbreviation_expansion: abbreviation='{abbreviation}'")
 
@@ -1427,14 +1428,15 @@ def create_kb_tools(
     @tool(args_schema=ReadTableInput)
     def read_table(section: str, source_file: Optional[str] = None, limit: int = 50) -> TableResult:
         """
-        Read table rows from a specific section of the knowledge base.
-        Returns structured table rows with columns as dict for easy processing.
-        Best for: structured data, IP tables, server lists, VLAN assignments, software versions.
-        Use list_sections first to find the exact section name if needed.
-        If source_file is provided, only that file is searched.
-        
-        Returns:
-            TableResult with section_query, list of rows with columns, and total_rows count
+        Прочитать строки таблицы из конкретного раздела базы знаний.
+        Возвращает структурированные строки таблицы со столбцами в виде словаря для удобной обработки.
+        Лучше всего для: структурированных данных — таблиц IP, списков серверов, назначений VLAN,
+        версий ПО.
+        При необходимости сначала используйте list_sections, чтобы узнать точное название раздела.
+        Если задан source_file, поиск идёт только по этому файлу.
+
+        Возвращает:
+            TableResult: section_query, список строк со столбцами и количество total_rows
         """
         logger.debug(f"Tool read_table: section='{section}', source_file={source_file!r}")
         rec = _db_request(
@@ -1463,12 +1465,21 @@ def create_kb_tools(
     @tool(args_schema=GetSectionContentInput)
     def get_section_content(source_file: str, section: str) -> SectionContent:
         """
-        Read the full text content of a specific section directly from the source .md file.
-        Best for: reading complete sections that may be split across many chunks, full tables,
-        numbered lists, code blocks that need to be read in full context.
-        Returns the entire section text including all subsections.
-        Use list_sections to find exact section and file names first.
-        
+        Прочитать полный текст конкретного раздела.
+        Лучше всего для: чтения целых разделов, которые могут быть разбиты на множество чанков,
+        полных таблиц, нумерованных списков, блоков кода, которые нужно видеть в полном контексте.
+        Возвращает весь текст раздела, включая подразделы.
+        Сначала используйте list_sections, чтобы узнать точные имена раздела и файла.
+
+        ВНИМАНИЕ / АРХИТЕКТУРНОЕ ПРАВИЛО (TODO):
+            Инструменты базы знаний ДОЛЖНЫ работать ТОЛЬКО с ClickHouse.
+            Исходные .md-файлы используются исключительно на этапе индексации
+            (загрузка чанков в БД). Текущая реализация читает текст с диска через
+            read_full_section() — это нарушает правило и ломается, когда сервер не
+            видит knowledge_dir или заголовок в файле не совпадает с индексом.
+            Переделать: собирать полный текст раздела из чанков ClickHouse
+            (source + section, ORDER BY line_start, chunk_index), без файлов.
+
         Returns:
             SectionContent with source, section name, line numbers (approximate), and full content
         """
@@ -1535,14 +1546,14 @@ def create_kb_tools(
     @tool(args_schema=ListSectionsInput)
     def list_sections(source_file: Optional[str] = None) -> SectionsTree:
         """
-        List all sections (breadcrumb paths H1 > H2 > ...) in the knowledge base.
-        Best for: discovering available content, finding the exact section name before using
-        get_section_content or read_table, understanding document structure.
-        Optionally filter by source_file to see sections from one document only.
-        Use list_sources first to get file names.
-        
-        Returns:
-            SectionsTree with optional source filter, list of sections with chunk counts, and total count
+        Список всех разделов (breadcrumb-пути H1 > H2 > ...) в базе знаний.
+        Лучше всего для: обзора доступного содержимого, выяснения точного названия раздела перед
+        использованием get_section_content или read_table, понимания структуры документов.
+        Необязательно фильтровать по source_file, чтобы увидеть разделы только одного документа.
+        Сначала используйте list_sources, чтобы узнать имена файлов.
+
+        Возвращает:
+            SectionsTree: необязательный фильтр по источнику, список разделов со счётчиками чанков и общее число
         """
         logger.debug(f"Tool list_sections: source_file={source_file!r}")
         rec = _db_request("DB:list_sections", f"source_file={source_file!r}")
@@ -1605,20 +1616,20 @@ def create_kb_tools(
         include_anchor: bool = True
     ) -> NeighborChunksResult:
         """
-        Get neighboring chunks around a specific chunk in the same source file.
-        Best for: expanding context when a found chunk is incomplete or cut off.
-        'source' and 'line_start' values come from metadata of previous search results.
-        Returns up to 'before' chunks before and 'after' chunks after the anchor position.
-        
-        Args:
-            source: Source filename
-            line_start: Line position of anchor chunk
-            before: Number of chunks to get before anchor
-            after: Number of chunks to get after anchor
-            include_anchor: If True (default), also returns the anchor chunk itself
-        
-        Returns:
-            NeighborChunksResult with anchor_chunk (optional), chunks_before list, and chunks_after list
+        Получить соседние чанки вокруг конкретного чанка в том же исходном файле.
+        Лучше всего для: расширения контекста, когда найденный чанк неполон или обрезан.
+        Значения 'source' и 'line_start' берутся из метаданных предыдущих результатов поиска.
+        Возвращает до 'before' чанков перед и 'after' чанков после позиции якоря.
+
+        Аргументы:
+            source: имя исходного файла
+            line_start: позиция (строка) якорного чанка
+            before: сколько чанков взять перед якорем
+            after: сколько чанков взять после якоря
+            include_anchor: если True (по умолчанию), вернуть и сам якорный чанк
+
+        Возвращает:
+            NeighborChunksResult: anchor_chunk (необязательно), список chunks_before и список chunks_after
         """
         logger.debug(
             f"Tool get_neighbor_chunks: [{source}] line {line_start}, "
@@ -1716,17 +1727,17 @@ def create_kb_tools(
         chunk_indices: list[int]
     ) -> SearchChunksResult:
         """
-        Get specific chunks by their indices from a particular source file and section.
-        Best for: retrieving specific chunks when you know exact indices from previous search results.
-        Useful for fetching referenced chunks or building context from known positions.
-        
-        Args:
-            source: Source filename (e.g. 'servers.md')
-            section: Section name or breadcrumb path
-            chunk_indices: List of chunk indices to retrieve (e.g. [0, 1, 5])
-        
-        Returns:
-            SearchChunksResult with the requested chunks
+        Получить конкретные чанки по их индексам из заданного исходного файла и раздела.
+        Лучше всего для: извлечения конкретных чанков, когда известны точные индексы из предыдущих результатов.
+        Полезно для подгрузки упомянутых чанков или сборки контекста из известных позиций.
+
+        Аргументы:
+            source: имя исходного файла (например, 'servers.md')
+            section: название раздела или breadcrumb-путь
+            chunk_indices: список индексов чанков (например, [0, 1, 5])
+
+        Возвращает:
+            SearchChunksResult с запрошенными чанками
         """
         logger.debug(
             f"Tool get_chunks_by_index: [{source}] section='{section}', "
@@ -1793,13 +1804,13 @@ def create_kb_tools(
     @tool
     def list_sources() -> SourcesList:
         """
-        List all source documents in the knowledge base with their chunk counts.
-        Best for: discovering what files are available, finding the right document to query,
-        understanding the overall scope of the knowledge base.
-        Always start here if you don't know which files contain the needed information.
-        
-        Returns:
-            SourcesList with list of sources, total sources count, and total chunks count
+        Список всех исходных документов в базе знаний с числом их чанков.
+        Лучше всего для: обзора доступных файлов, выбора нужного документа для запроса,
+        понимания общего охвата базы знаний.
+        Всегда начинайте отсюда, если не знаете, в каких файлах находится нужная информация.
+
+        Возвращает:
+            SourcesList: список источников, общее число источников и общее число чанков
         """
         logger.debug("Tool list_sources")
         rec = _db_request("DB:list_sources", "GROUP BY source ORDER BY source")
@@ -1837,14 +1848,14 @@ def create_kb_tools(
     @tool
     def list_all_sections() -> SearchSectionsResult:
         """
-        List all unique (source, section_name) pairs from the knowledge base.
-        Section name is extracted as the last subsection (last part after ' > ').
-        Best for: getting a complete list of available sections before planning,
-        avoiding assumptions about non-existent documentation sections.
-        Should be called at the beginning of query processing to understand available content.
+        Список всех уникальных пар (source, section_name) из базы знаний.
+        Название раздела берётся как последний подраздел (часть после последнего ' > ').
+        Лучше всего для: получения полного списка доступных разделов перед планированием,
+        чтобы не делать предположений о несуществующих разделах документации.
+        Стоит вызывать в начале обработки запроса, чтобы понять доступное содержимое.
 
-        Returns:
-            SearchSectionsResult with query="", list of all unique sections, and totals
+        Возвращает:
+            SearchSectionsResult: query="", список всех уникальных разделов и итоги
         """
         logger.debug("Tool list_all_sections")
         rec = _db_request("DB:list_all_sections", "DISTINCT source, section -> parse last subsection")
