@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>KB Tools Search</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; font-size: 13px; background: #1e1e1e; color: #d4d4d4; padding: 16px; }
+
+  #header { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+  #query { flex: 1; padding: 8px 10px; font-family: monospace; font-size: 14px;
+           background: #2d2d2d; border: 1px solid #555; color: #d4d4d4; border-radius: 3px; }
+  #query:focus { outline: none; border-color: #888; }
+  #btn { padding: 8px 18px; background: #0e639c; color: #fff; border: none;
+         font-family: monospace; font-size: 13px; cursor: pointer; border-radius: 3px; }
+  #btn:hover { background: #1177bb; }
+  #btn:disabled { background: #444; cursor: default; }
+  #server-label { font-size: 11px; color: #888; }
+
+  #results { display: flex; flex-direction: column; gap: 12px; }
+
+  .tool-block { border: 1px solid #333; border-radius: 4px; overflow: hidden; }
+  .tool-header { background: #252525; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; }
+  .tool-name  { color: #9cdcfe; font-weight: bold; }
+  .tool-query { color: #888; }
+  .tool-count { color: #608b4e; font-size: 11px; }
+  .tool-error { color: #f48771; font-size: 11px; }
+  .tool-body  { padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* ---- Section results (search_section_by_name) ---- */
+  .section-block { display: flex; flex-direction: column; gap: 4px; }
+  .section-row   { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .section-source { color: #ce9178; }
+  .section-sep    { color: #555; }
+  .section-name   { color: #dcdcaa; }
+  .badge { font-size: 10px; padding: 1px 5px; border-radius: 2px; margin-left: 4px; }
+  .badge-NAME     { background: #1e4d1e; color: #6abf69; }
+  .badge-SEMANTIC { background: #1a3a5c; color: #6db3f2; }
+  .badge-FUZZY    { background: #3d2b00; color: #e5a550; }
+  .badge-CONTENT  { background: #3a1a3a; color: #c586c0; }
+  .score { color: #888; font-size: 11px; }
+
+  /* ---- Chunk results (exact_search, semantic_search) ---- */
+  .chunk { display: flex; flex-direction: column; gap: 3px; }
+  .chunk-meta     { color: #888; font-size: 11px; }
+  .chunk-meta .src  { color: #ce9178; }
+  .chunk-meta .sec  { color: #dcdcaa; }
+  .chunk-score    { color: #608b4e; }
+
+  /* context regions */
+  .ctx-before pre.content,
+  .ctx-after  pre.content { opacity: 0.55; border-left: 2px solid #383838; }
+  .ctx-anchor pre.content { border-left: 2px solid #4a90d9; }
+
+  pre.content {
+    white-space: pre-wrap; word-break: break-word;
+    background: #252525; border: 1px solid #2e2e2e;
+    padding: 6px 8px; border-radius: 2px;
+    color: #d4d4d4; line-height: 1.5; max-height: 360px; overflow-y: auto;
+    margin: 0;
+  }
+  pre.section-preview {
+    max-height: 420px; opacity: 0.85;
+    border-left: 2px solid #3a3a3a !important;
+  }
+
+  /* ---- Abbreviations ---- */
+  .abbr-row { border-left: 2px solid #444; padding-left: 8px; }
+  .abbr-expansion { color: #4ec9b0; margin-bottom: 3px; }
+
+  /* ---- Spinner ---- */
+  .spinner { display: inline-block; width: 10px; height: 10px;
+             border: 2px solid #555; border-top-color: #9cdcfe;
+             border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pending { color: #888; font-style: italic; padding: 6px 10px; }
+
+  /* chunk divider */
+  .ctx-sep { border: none; border-top: 1px solid #2e2e2e; margin: 1px 0; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <input id="query" type="text" placeholder="Поисковый запрос..." autofocus>
+  <button id="btn" onclick="runSearch()">Поиск</button>
+  <span id="server-label">http://localhost:8000</span>
+</div>
+<div id="results"></div>
+
+<script>
+const SERVER = "http://localhost:8000/call";
+
+document.getElementById("query").addEventListener("keydown", e => {
+  if (e.key === "Enter") runSearch();
+});
+
+async function callTool(tool, args) {
+  const resp = await fetch(SERVER, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool, args }),
+  });
+  return await resp.json();
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Чанки, которые не несут текстовой информации (только картинки / заголовок / пустота)
+function isUseless(content) {
+  const t = (content || "").trim();
+  if (t.length < 8) return true;
+  // Состоит только из markdown-изображений: ![...](...)
+  if (/^(\s*!\[[^\]]*\]\([^)]*\)\s*)+$/.test(t)) return true;
+  return false;
+}
+
+// Взять первые чанки с реальным текстом, пока не наберём minChars или maxItems штук
+function pickUseful(chunks, maxItems = 3, minChars = 400) {
+  const result = [];
+  let chars = 0;
+  for (const c of chunks) {
+    if (isUseless(c.content)) continue;
+    result.push(c);
+    chars += (c.content || "").length;
+    if (result.length >= maxItems && chars >= minChars) break;
+    if (result.length >= maxItems + 2) break; // жёсткий предел
+  }
+  return result;
+}
+
+// ---- Render: sections with first useful chunks as preview ----
+async function renderSections(data) {
+  const sections = data.result?.sections || [];
+  if (!sections.length) return '<div class="pending">Нет результатов</div>';
+
+  // Берём с запасом — первые 10 чанков, потом фильтруем пустышки
+  const expanded = await Promise.all(sections.map(async s => {
+    try {
+      const d = await callTool("get_chunks_by_index", {
+        source: s.source,
+        section: s.section,
+        chunk_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      });
+      return { section: s, chunks: d.ok ? (d.result?.chunks || []) : [] };
+    } catch {
+      return { section: s, chunks: [] };
+    }
+  }));
+
+  return expanded.map(({ section: s, chunks }) => {
+    const badgeClass = `badge-${s.match_type || "NAME"}`;
+    const scoreHtml = s.score != null
+      ? `<span class="score">${(s.score * 100).toFixed(0)}%</span>` : "";
+    const useful = pickUseful(chunks, 3, 400);
+    const preview = useful.length
+      ? `<pre class="content section-preview">${useful.map(c => esc(c.content)).join("\n\n──────\n\n")}</pre>`
+      : "";
+    return `<div class="section-block">
+      <div class="section-row">
+        <span class="section-source">${esc(s.source)}</span>
+        <span class="section-sep">/</span>
+        <span class="section-name">${esc(s.section)}</span>
+        <span class="badge ${badgeClass}">${esc(s.match_type)} ${esc(s.match_count)}</span>
+        ${scoreHtml}
+      </div>
+      ${preview}
+    </div>`;
+  }).join("");
+}
+
+// ---- Render: chunks with neighbor context ----
+async function renderChunks(data) {
+  const chunks = data.result?.chunks || [];
+  if (!chunks.length) return '<div class="pending">Нет результатов</div>';
+
+  // Берём соседей с запасом (before=2, after=5), чтобы после фильтра картинок
+  // осталось достаточно текста (~1 до + ~2-3 после якоря)
+  const expanded = await Promise.all(chunks.map(async c => {
+    const m = c.metadata || {};
+    if (!m.source || !m.line_start) return { chunk: c, before: [], after: [] };
+    try {
+      const d = await callTool("get_neighbor_chunks", {
+        source: m.source,
+        line_start: m.line_start,
+        before: 2,
+        after: 5,
+      });
+      if (d.ok) {
+        return {
+          chunk: c,
+          before: d.result?.chunks_before || [],
+          after:  d.result?.chunks_after  || [],
+        };
+      }
+    } catch {}
+    return { chunk: c, before: [], after: [] };
+  }));
+
+  return expanded.map(({ chunk: c, before, after }) => {
+    const m = c.metadata || {};
+    const scoreHtml = c.score != null
+      ? `<span class="chunk-score"> score=${c.score.toFixed(3)}</span>` : "";
+
+    // Из before берём последний полезный (ближайший к якорю)
+    const usefulBefore = before.filter(ch => !isUseless(ch.content)).slice(-1);
+    // Из after набираем текст до ~400 символов или 3 чанков
+    const usefulAfter = pickUseful(after, 3, 400);
+
+    const beforeHtml = usefulBefore.map(ch =>
+      `<div class="ctx-before"><pre class="content">${esc(ch.content)}</pre></div>`
+    ).join('<hr class="ctx-sep">');
+
+    // Якорный чанк показываем всегда (даже если картинка — это и есть найденное)
+    const anchorHtml = `<div class="ctx-anchor"><pre class="content">${esc(c.content)}</pre></div>`;
+
+    const afterHtml = usefulAfter.map(ch =>
+      `<div class="ctx-after"><pre class="content">${esc(ch.content)}</pre></div>`
+    ).join('<hr class="ctx-sep">');
+
+    const sepBA = usefulBefore.length ? '<hr class="ctx-sep">' : "";
+    const sepAA = usefulAfter.length  ? '<hr class="ctx-sep">' : "";
+
+    return `<div class="chunk">
+      <div class="chunk-meta">
+        <span class="src">${esc(m.source)}</span> /
+        <span class="sec">${esc(m.section)}</span>
+        · line ${esc(m.line_start)}${scoreHtml}
+      </div>
+      ${beforeHtml}${sepBA}${anchorHtml}${sepAA}${afterHtml}
+    </div>`;
+  }).join("");
+}
+
+// ---- Render: abbreviations ----
+function renderAbbreviations(data) {
+  const expansions = data.result?.expansions || [];
+  if (!expansions.length) return '<div class="pending">Нет результатов</div>';
+  return expansions.map(e => {
+    const m = e.chunk?.metadata || {};
+    return `<div class="abbr-row">
+      <div class="abbr-expansion">${esc(e.expansion)}</div>
+      <div class="chunk-meta">
+        <span class="src">${esc(m.source)}</span> /
+        <span class="sec">${esc(m.section)}</span>
+        · line ${esc(m.line_start)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ---- Block UI ----
+function makeBlock(toolName, query) {
+  const div = document.createElement("div");
+  div.className = "tool-block";
+  div.innerHTML = `
+    <div class="tool-header">
+      <span class="tool-name">${esc(toolName)}</span>
+      <span class="tool-query">"${esc(query)}"</span>
+      <span class="tool-count"><span class="spinner"></span>выполняется...</span>
+    </div>
+    <div class="tool-body pending">...</div>`;
+  document.getElementById("results").prepend(div);
+  return {
+    setResult(html, countText) {
+      div.querySelector(".tool-count").innerHTML = countText;
+      div.querySelector(".tool-body").className = "tool-body";
+      div.querySelector(".tool-body").innerHTML = html;
+    },
+    setError(msg) {
+      div.querySelector(".tool-count").innerHTML = `<span class="tool-error">ошибка</span>`;
+      div.querySelector(".tool-body").className = "tool-body";
+      div.querySelector(".tool-body").innerHTML = `<span class="tool-error">${esc(msg)}</span>`;
+    },
+  };
+}
+
+// ---- Main ----
+async function runSearch() {
+  const query = document.getElementById("query").value.trim();
+  if (!query) return;
+  const btn = document.getElementById("btn");
+  btn.disabled = true;
+
+  const steps = [
+    {
+      tool: "search_section_by_name",
+      args: { query, limit: 5 },
+      count: d => `${(d.result?.sections || []).length} разделов`,
+      render: d => renderSections(d),
+    },
+    {
+      tool: "semantic_search",
+      args: { query, top_k: 10 },
+      count: d => `${(d.result?.chunks || []).length} чанков`,
+      render: d => renderChunks(d),
+    },
+    {
+      tool: "exact_search",
+      args: { query, limit: 10 },
+      count: d => `${(d.result?.chunks || []).length} чанков`,
+      render: d => renderChunks(d),
+    },
+    {
+      tool: "search_abbreviation",
+      args: { query },
+      count: d => `${(d.result?.expansions || []).length} расшифровок`,
+      render: d => Promise.resolve(renderAbbreviations(d)),
+    },
+  ];
+
+  for (const step of steps) {
+    const block = makeBlock(step.tool, query);
+    try {
+      const data = await callTool(step.tool, step.args);
+      if (!data.ok) { block.setError(data.error || "ошибка сервера"); continue; }
+      const countText = step.count(data);
+      const html = await step.render(data);
+      block.setResult(html, countText);
+    } catch (e) {
+      block.setError(e.message);
+    }
+  }
+
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>

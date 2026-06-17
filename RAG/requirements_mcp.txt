@@ -1,0 +1,6 @@
+# Дополнительные зависимости для MCP-сервера (Streamable HTTP транспорт).
+# Базовые зависимости (langchain, clickhouse-connect и т.д.) — из requirements.txt.
+
+mcp>=1.21
+uvicorn[standard]>=0.27
+starlette>=0.40

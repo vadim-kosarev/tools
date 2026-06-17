@@ -1,0 +1,22 @@
+{
+  "comment": "Скопируйте нужный блок в ~/.continue/config.json",
+
+  "=== stdio транспорт (рекомендуется: Continue сам запускает процесс) ===": {},
+  "mcpServers": {
+    "kb-tools": {
+      "command": "C:/dev/github.com/vadim-kosarev/tools.0/RAG/kb_tools_mcp_stdio.bat",
+      "args": [],
+      "env": {}
+    }
+  },
+
+  "=== Streamable HTTP (нужен запущенный kb_tools_mcp_http.py) ===": {},
+  "mcpServers_http": {
+    "kb-tools": {
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8000/mcp"
+      }
+    }
+  }
+}
