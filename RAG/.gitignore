@@ -1,0 +1,17 @@
+# Environment variables (могут содержать чувствительные данные)
+.env
+
+# Logs
+logs/
+
+# ClickHouse data
+*.clickhouse
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Данные / извлечённые файлы (не код)
+ips_all.txt
+
