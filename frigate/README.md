@@ -1,5 +1,24 @@
 # Frigate
 
+## Запуск / Обновление
+
+Рабочая директория: `frigate`
+
+```powershell
+cd C:\dev\github.com\vadim-kosarev\tools\frigate
+```
+
+**Обновить и запустить:**
+```powershell
+docker compose pull
+docker compose up -d
+```
+
+**Просто запустить (без обновления):**
+```powershell
+docker compose up -d
+```
+
 ## Backup
 
 ### PostgreSQL (события, метаданные)

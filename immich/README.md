@@ -1,5 +1,29 @@
 # Immich
 
+## Запуск / Обновление
+
+Рабочая директория: `immich\docker`
+
+```powershell
+cd C:\dev\github.com\vadim-kosarev\tools\immich\docker
+```
+
+**Обновить и запустить:**
+```powershell
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml build --pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+- `pull` — скачивает свежие образы (redis, postgres, ML, etc.)
+- `build --pull` — пересобирает кастомный immich-server (Dockerfile с UTF-8 патчем)
+- `up -d` — пересоздаёт контейнеры с новыми образами
+
+**Просто запустить (без обновления):**
+```powershell
+docker compose -f docker-compose.prod.yml up -d
+```
+
 ## Backup
 
 ### Database (PostgreSQL)
