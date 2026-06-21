@@ -43,6 +43,14 @@ Frigate создаёт `backup.db` при обновлениях, но это н
 
 Внешний бэкап медиа не настроен.
 
+## Детектор
+
+Используется дефолтный CPU-детектор (TFLite SSD MobileNet). GPU (RTX 3060 Ti) занята под
+ffmpeg hwaccel (декодирование потоков), semantic search (jina embeddings) и face recognition.
+
+ONNX-детектор с TensorRT **не использовать** — компиляция engine при старте зависает на 20+ минут
+и не завершается. Модели лежат в `/config/onnx/`, конфиг закомментирован в `config.yaml`.
+
 ### TODO
 
 - [ ] Бэкап `frigate.db` (cron-копия в `K:\frigate\backups\sqlite`)
