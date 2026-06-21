@@ -212,13 +212,14 @@ _HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Face Search</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
        background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
 .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
+h1 { text-align: center; margin-bottom: 20px; color: #e94560; font-size: 24px; }
 
 .paste-zone {
     border: 3px dashed #e94560; border-radius: 12px; padding: 40px;
@@ -265,6 +266,20 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
     max-height: 0; overflow: hidden; transition: max-height 0.4s ease;
 }
 .weak-results.open { max-height: 5000px; }
+
+@media (max-width: 600px) {
+    .container { padding: 10px; }
+    h1 { font-size: 20px; margin-bottom: 12px; }
+    .paste-zone { padding: 24px 16px; min-height: 140px; }
+    .paste-zone .hint { font-size: 15px; }
+    .paste-zone img { max-height: 200px; }
+    .results { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .card .thumb { height: 150px; }
+    .card .info { padding: 8px; }
+    .card .name { font-size: 14px; }
+    .card .dist { font-size: 11px; }
+    .card .faces { font-size: 11px; }
+}
 </style>
 </head>
 <body>
