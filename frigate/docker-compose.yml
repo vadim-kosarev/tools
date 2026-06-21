@@ -123,6 +123,29 @@ services:
       - docker-network
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: postgres-backup
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: rgzz
+      POSTGRES_PASSWORD: rgzz
+      POSTGRES_DB: rgzz
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      TZ: Europe/Moscow
+    volumes:
+      - ${FRIGATE_MEDIA_PATH}/backups/postgres:/backups
+    networks:
+      - docker-network
+
+  # ----------------------------------------------------------------------------------------------------------------------------------------
   metabase:
     hostname: metabase.rgzz
     image: metabase/metabase:latest
