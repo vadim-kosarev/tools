@@ -271,7 +271,8 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
 <div class="container">
 <h1>Face Search</h1>
 <div class="paste-zone" id="pasteZone" tabindex="0">
-    <div class="hint">Ctrl+V to paste face image, or drag & drop</div>
+    <div class="hint">Ctrl+V to paste, drag & drop, or tap to upload</div>
+    <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
 </div>
 <div class="status" id="status"></div>
 <div class="results" id="results"></div>
@@ -290,6 +291,14 @@ const immichBase = IMMICH_HOSTS[window.location.hostname] || `${window.location.
 const zone = document.getElementById('pasteZone');
 const status = document.getElementById('status');
 const results = document.getElementById('results');
+
+const fileInput = document.getElementById('fileInput');
+
+zone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) handleImage(fileInput.files[0]);
+    fileInput.value = '';
+});
 
 zone.addEventListener('paste', e => {
     const items = e.clipboardData?.items;
