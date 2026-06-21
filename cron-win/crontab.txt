@@ -1,1 +1,1 @@
-5 5 * * * "C:\Program Files\PowerShell\7\pwsh.exe" -ExecutionPolicy Bypass -File .\cron-win.ps1
+5 5 * * * powershell -ExecutionPolicy Bypass -File .\cron-win.ps1

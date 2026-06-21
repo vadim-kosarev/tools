@@ -1,19 +1,19 @@
 $ErrorActionPreference = "Stop"
 
-$envFile = Join-Path $PSScriptRoot "docker\.env"
-if (-not (Test-Path $envFile)) {
-    Write-Error ".env not found: $envFile"
+$configFile = Join-Path $PSScriptRoot "docker\.env"
+if (-not (Test-Path $configFile)) {
+    Write-Error ".env not found: $configFile"
     exit 1
 }
 
-$env = @{}
-Get-Content $envFile -Encoding UTF8 | ForEach-Object {
+$config = @{}
+Get-Content $configFile -Encoding UTF8 | ForEach-Object {
     if ($_ -match '^\s*([^#][^=]+?)\s*=\s*(.+?)\s*$') {
-        $env[$Matches[1]] = $Matches[2]
+        $config[$Matches[1]] = $Matches[2]
     }
 }
 
-$uploadLocation = $env["UPLOAD_LOCATION"]
+$uploadLocation = $config["UPLOAD_LOCATION"]
 if (-not $uploadLocation) {
     Write-Error "UPLOAD_LOCATION not defined in .env"
     exit 1
@@ -21,7 +21,7 @@ if (-not $uploadLocation) {
 
 $Source = Join-Path $uploadLocation "photos\backups"
 
-$Destination = $env["BACKUP_DESTINATION"]
+$Destination = $config["BACKUP_DESTINATION"]
 if (-not $Destination) {
     Write-Error "BACKUP_DESTINATION not defined in .env"
     exit 1
