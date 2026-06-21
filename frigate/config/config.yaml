@@ -29,18 +29,18 @@ telemetry:
 
 
 
-# detectors:
-#  onnx_one:
-#    type: onnx
+detectors:
+  onnx:
+    type: onnx
 
-# model:
-#  model_type: yolo-generic
-#  input_tensor: nchw
-#  input_dtype: float
-#  labelmap_path: /config/yyy/coco-80.txt
-#  path: /config/onnx/yolov9t_transposed.onnx
-#  width: 640
-#  height: 640
+model:
+  model_type: yolo-generic
+  input_tensor: nchw
+  input_dtype: float
+  labelmap_path: /config/yyy/coco-80.txt
+  path: /config/onnx/yolov9t_transposed.onnx
+  width: 640
+  height: 640
 
 
 cameras:
