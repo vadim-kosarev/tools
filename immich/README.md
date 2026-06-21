@@ -48,10 +48,14 @@ docker compose -f docker-compose.prod.yml up -d
 
 Sidecar-контейнер для поиска людей по фото лица в базе Immich.
 
-- Веб-интерфейс: `http://host:8765` — вставить фото (Ctrl+V / drag-drop), получить список совпадений
+- Веб-интерфейс: `http://brightsky:8765` (локально) / `https://vkosarev.name:8766` (удалённо)
+- Вставить фото (Ctrl+V / drag-drop) — получить список совпадений с thumbnails
+- Результаты >= 50% match показываются сразу, слабые скрыты под выезжающую панель
+- Ссылки на людей ведут в Immich (домен подбирается автоматически по hostname браузера)
 - Использует Immich ML (`/predict`) для извлечения эмбеддингов — не тащит InsightFace/ONNX локально
 - Ищет по pgvector в базе Immich (cosine distance)
 - Проксирует thumbnails через `/api/thumb/{id}` (решает проблему аутентификации)
+- Проброшен наружу через frpc (`8765 → 8765`, nginx на VPS слушает на `8766`)
 
 **Сборка и запуск:**
 ```powershell
@@ -61,6 +65,8 @@ docker compose -f docker-compose.prod.yml up -d face-search
 
 **Env vars** (берутся из общего `.env`, можно переопределить):
 - `IMMICH_API_KEY` — нужен для загрузки thumbnails (создать в Immich UI: User Settings -> API Keys)
+
+**Важно:** на VPS nginx для `vkosarev.name:8766` нужен `client_max_body_size 10m;` (base64-картинки больше дефолтного 1MB).
 
 ### TODO
 

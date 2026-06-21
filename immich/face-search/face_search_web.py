@@ -150,7 +150,6 @@ def _search_immich(embedding: list[float], top_k: int = 20) -> list[dict]:
             "name": row[1],
             "distance": round(float(row[2]), 4),
             "face_count": row[3],
-            "immich_url": f"{IMMICH_URL}/people/{row[0]}",
             "thumb_url": f"/api/thumb/{row[0]}",
         })
     conn.close()
@@ -253,6 +252,19 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
 .bar .fill.good { background: #4ecca3; }
 .bar .fill.ok { background: #e9c46a; }
 .bar .fill.weak { background: #e76f51; }
+
+.weak-toggle {
+    text-align: center; margin: 20px 0; cursor: pointer;
+    color: #888; font-size: 14px; user-select: none;
+    transition: color 0.2s;
+}
+.weak-toggle:hover { color: #e94560; }
+.weak-toggle .arrow { display: inline-block; transition: transform 0.3s; }
+.weak-toggle.open .arrow { transform: rotate(180deg); }
+.weak-results {
+    max-height: 0; overflow: hidden; transition: max-height 0.4s ease;
+}
+.weak-results.open { max-height: 5000px; }
 </style>
 </head>
 <body>
@@ -263,8 +275,18 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
 </div>
 <div class="status" id="status"></div>
 <div class="results" id="results"></div>
+<div class="weak-toggle" id="weakToggle" style="display:none" onclick="toggleWeak()">
+    <span class="arrow">&#9660;</span> Show weak matches (&lt;50%)
+</div>
+<div class="weak-results" id="weakResults"></div>
 </div>
 <script>
+const IMMICH_HOSTS = {
+    'brightsky': 'http://brightsky:2283',
+    'vkosarev.name': 'https://vkosarev.name:7601',
+};
+const immichBase = IMMICH_HOSTS[window.location.hostname] || `${window.location.protocol}//${window.location.hostname}:2283`;
+
 const zone = document.getElementById('pasteZone');
 const status = document.getElementById('status');
 const results = document.getElementById('results');
@@ -330,23 +352,51 @@ function handleImage(file) {
     reader.readAsDataURL(file);
 }
 
+function renderCard(r) {
+    const pct = Math.max(0, Math.min(100, (1 - r.distance) * 100));
+    const cls = r.distance < 0.4 ? 'good' : r.distance < 0.6 ? 'ok' : 'weak';
+    return `
+    <div class="card">
+        <a href="${immichBase}/people/${r.person_id}" target="_blank">
+            <img class="thumb" src="${r.thumb_url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22><rect fill=%22%230f3460%22 width=%22200%22 height=%22200%22/><text x=%22100%22 y=%22110%22 text-anchor=%22middle%22 fill=%22%23888%22 font-size=%2240%22>?</text></svg>'" alt="${r.name}">
+            <div class="info">
+                <div class="name">${r.name}</div>
+                <div class="dist">Distance: ${r.distance.toFixed(3)} (${pct.toFixed(0)}% match)</div>
+                <div class="faces">${r.face_count} faces in Immich</div>
+                <div class="bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
+            </div>
+        </a>
+    </div>`;
+}
+
 function renderResults(items) {
-    results.innerHTML = items.map(r => {
-        const pct = Math.max(0, Math.min(100, (1 - r.distance) * 100));
-        const cls = r.distance < 0.4 ? 'good' : r.distance < 0.6 ? 'ok' : 'weak';
-        return `
-        <div class="card">
-            <a href="${r.immich_url}" target="_blank">
-                <img class="thumb" src="${r.thumb_url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22><rect fill=%22%230f3460%22 width=%22200%22 height=%22200%22/><text x=%22100%22 y=%22110%22 text-anchor=%22middle%22 fill=%22%23888%22 font-size=%2240%22>?</text></svg>'" alt="${r.name}">
-                <div class="info">
-                    <div class="name">${r.name}</div>
-                    <div class="dist">Distance: ${r.distance.toFixed(3)} (${pct.toFixed(0)}% match)</div>
-                    <div class="faces">${r.face_count} faces in Immich</div>
-                    <div class="bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
-                </div>
-            </a>
-        </div>`;
-    }).join('');
+    let strong = items.filter(r => (1 - r.distance) >= 0.5);
+    let weak = items.filter(r => (1 - r.distance) < 0.5);
+    if (strong.length === 0 && weak.length > 0) {
+        strong = [weak.shift()];
+    }
+
+    results.innerHTML = strong.map(renderCard).join('');
+
+    const weakToggle = document.getElementById('weakToggle');
+    const weakResults = document.getElementById('weakResults');
+    if (weak.length > 0) {
+        weakToggle.style.display = 'block';
+        weakToggle.innerHTML = `<span class="arrow">&#9660;</span> Show ${weak.length} weak matches (&lt;50%)`;
+        weakToggle.className = 'weak-toggle';
+        weakResults.innerHTML = '<div class="results">' + weak.map(renderCard).join('') + '</div>';
+        weakResults.className = 'weak-results';
+    } else {
+        weakToggle.style.display = 'none';
+        weakResults.innerHTML = '';
+    }
+}
+
+function toggleWeak() {
+    const toggle = document.getElementById('weakToggle');
+    const panel = document.getElementById('weakResults');
+    toggle.classList.toggle('open');
+    panel.classList.toggle('open');
 }
 </script>
 </body>
