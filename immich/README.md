@@ -44,6 +44,24 @@ docker compose -f docker-compose.prod.yml up -d
 - Расписание: еженедельно, воскресенье в 04:00 (через cron-win, см. `crontab.txt`)
 - Пропускает копирование если файл уже скопирован (сравнение по размеру)
 
+## Face Search
+
+Sidecar-контейнер для поиска людей по фото лица в базе Immich.
+
+- Веб-интерфейс: `http://host:8765` — вставить фото (Ctrl+V / drag-drop), получить список совпадений
+- Использует Immich ML (`/predict`) для извлечения эмбеддингов — не тащит InsightFace/ONNX локально
+- Ищет по pgvector в базе Immich (cosine distance)
+- Проксирует thumbnails через `/api/thumb/{id}` (решает проблему аутентификации)
+
+**Сборка и запуск:**
+```powershell
+docker compose -f docker-compose.prod.yml build face-search
+docker compose -f docker-compose.prod.yml up -d face-search
+```
+
+**Env vars** (берутся из общего `.env`, можно переопределить):
+- `IMMICH_API_KEY` — нужен для загрузки thumbnails (создать в Immich UI: User Settings -> API Keys)
+
 ### TODO
 
 - [ ] Бэкап медиафайлов
