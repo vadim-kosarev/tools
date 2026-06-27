@@ -1,0 +1,715 @@
+'use strict';
+
+const { createApp, ref, computed, watch, onMounted, reactive, provide, inject, defineComponent } = Vue;
+const { createRouter, createWebHistory, useRouter, useRoute, RouterView, RouterLink } = VueRouter;
+
+// ---------------------------------------------------------------------------
+// API helper
+// ---------------------------------------------------------------------------
+const api = {
+    async request(method, url, body) {
+        const opts = {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+        };
+        if (body !== undefined) opts.body = JSON.stringify(body);
+        const resp = await fetch(url, opts);
+        if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            throw new Error(`${resp.status} ${text.slice(0, 200)}`);
+        }
+        return resp.json();
+    },
+    get: (url) => api.request('GET', url),
+    post: (url, body) => api.request('POST', url, body),
+    put: (url, body) => api.request('PUT', url, body),
+};
+
+// ---------------------------------------------------------------------------
+// Toast service
+// ---------------------------------------------------------------------------
+const toasts = ref([]);
+let _toastId = 0;
+
+function showToast(message, type = 'success', duration = 3500) {
+    const id = ++_toastId;
+    toasts.value.push({ id, message, type });
+    setTimeout(() => {
+        const idx = toasts.value.findIndex(t => t.id === id);
+        if (idx !== -1) toasts.value.splice(idx, 1);
+    }, duration);
+}
+
+// ---------------------------------------------------------------------------
+// Merge modal state (global)
+// ---------------------------------------------------------------------------
+const mergeState = reactive({
+    show: false,
+    source: null,
+    target: null,
+    targetSearch: '',
+    targetResults: [],
+    targetLoading: false,
+    merging: false,
+});
+
+let mergeSearchTimer = null;
+
+async function openMerge(person) {
+    mergeState.source = person;
+    mergeState.target = null;
+    mergeState.targetSearch = '';
+    mergeState.targetResults = [];
+    mergeState.show = true;
+}
+
+function closeMerge() {
+    mergeState.show = false;
+    mergeState.source = null;
+    mergeState.target = null;
+}
+
+async function searchMergeTargets(q) {
+    if (!q || q.length < 1) { mergeState.targetResults = []; return; }
+    mergeState.targetLoading = true;
+    try {
+        const data = await api.get(`/api/persons?q=${encodeURIComponent(q)}&limit=20&named_only=true`);
+        mergeState.targetResults = data.items.filter(p => p.id !== mergeState.source?.id);
+    } catch (e) {
+        mergeState.targetResults = [];
+    } finally {
+        mergeState.targetLoading = false;
+    }
+}
+
+watch(() => mergeState.targetSearch, (val) => {
+    clearTimeout(mergeSearchTimer);
+    mergeSearchTimer = setTimeout(() => searchMergeTargets(val), 300);
+});
+
+async function confirmMerge(router) {
+    if (!mergeState.source || !mergeState.target) return;
+    mergeState.merging = true;
+    try {
+        const data = await api.post('/api/persons/merge', {
+            source_id: mergeState.source.id,
+            target_id: mergeState.target.id,
+        });
+        showToast(`Merged ${data.merged_face_count} faces into "${data.target_name}"`, 'success');
+        closeMerge();
+        // Navigate to target person to see the merged result
+        if (router) router.push(`/persons/${mergeState?.target?.id || ''}`);
+    } catch (e) {
+        showToast(`Merge failed: ${e.message}`, 'error');
+    } finally {
+        mergeState.merging = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------------
+
+const ToastContainer = defineComponent({
+    setup() { return { toasts }; },
+    template: `
+    <div class="toast-container">
+        <div v-for="t in toasts" :key="t.id" :class="['toast', t.type]">{{ t.message }}</div>
+    </div>
+    `,
+});
+
+const MergeModal = defineComponent({
+    setup() {
+        const router = useRouter();
+        return { mergeState, closeMerge, confirmMerge: () => confirmMerge(router) };
+    },
+    template: `
+    <div class="modal-overlay" v-if="mergeState.show" @click.self="closeMerge">
+        <div class="modal">
+            <div class="modal-title">Merge Persons</div>
+
+            <div class="merge-persons">
+                <div class="merge-person-box">
+                    <div class="mp-label">Source (will be removed)</div>
+                    <img v-if="mergeState.source" :src="mergeState.source.thumb_url" alt="">
+                    <div class="mp-name" :class="{ unnamed: !mergeState.source?.name }">
+                        {{ mergeState.source?.name || 'Unknown' }}
+                    </div>
+                    <div class="mp-count">{{ mergeState.source?.face_count }} faces</div>
+                </div>
+                <div class="merge-arrow">→</div>
+                <div class="merge-person-box">
+                    <div class="mp-label">Target (will absorb)</div>
+                    <img v-if="mergeState.target" :src="mergeState.target.thumb_url" alt=""
+                         style="border: 2px solid var(--accent)">
+                    <div v-if="!mergeState.target" style="width:80px;height:80px;border-radius:8px;background:var(--bg-card);margin:0 auto 8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:28px">?</div>
+                    <div class="mp-name" :class="{ unnamed: !mergeState.target?.name }">
+                        {{ mergeState.target?.name || (mergeState.target ? 'Unknown' : 'Select below') }}
+                    </div>
+                    <div class="mp-count" v-if="mergeState.target">{{ mergeState.target.face_count }} faces</div>
+                </div>
+            </div>
+
+            <div class="merge-target-search">
+                <label>Search target person:</label>
+                <div class="search-bar" style="width:100%;height:38px">
+                    <span class="search-icon">&#128269;</span>
+                    <input v-model="mergeState.targetSearch" placeholder="Type a name..." autofocus>
+                </div>
+                <div v-if="mergeState.targetResults.length" class="merge-search-results">
+                    <div
+                        v-for="p in mergeState.targetResults" :key="p.id"
+                        :class="['merge-result-row', { selected: mergeState.target?.id === p.id }]"
+                        @click="mergeState.target = p"
+                    >
+                        <img :src="p.thumb_url" alt="">
+                        <div>
+                            <div class="mr-name">{{ p.name }}</div>
+                            <div class="mr-count">{{ p.face_count }} faces</div>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="mergeState.targetLoading" style="font-size:12px;color:var(--text-muted);padding:8px 0">Searching...</div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-ghost" @click="closeMerge">Cancel</button>
+                <button
+                    class="btn btn-danger"
+                    :disabled="!mergeState.target || mergeState.merging"
+                    @click="confirmMerge"
+                >
+                    {{ mergeState.merging ? 'Merging...' : 'Confirm Merge' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+const PersonsView = defineComponent({
+    setup() {
+        const router = useRouter();
+        const persons = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const loading = ref(false);
+        const search = ref('');
+        const namedOnly = ref(false);
+        let searchTimer = null;
+
+        const hasMore = computed(() => persons.value.length < total.value);
+
+        async function load(reset = false) {
+            if (loading.value) return;
+            if (reset) { page.value = 1; persons.value = []; }
+            loading.value = true;
+            try {
+                const q = search.value ? `&q=${encodeURIComponent(search.value)}` : '';
+                const named = namedOnly.value ? '&named_only=true' : '';
+                const data = await api.get(`/api/persons?page=${page.value}&limit=50${q}${named}`);
+                if (reset) persons.value = data.items;
+                else persons.value.push(...data.items);
+                total.value = data.total;
+                page.value++;
+            } catch (e) {
+                showToast('Failed to load persons: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        function onSearch() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => load(true), 350);
+        }
+
+        onMounted(() => load(true));
+        watch(namedOnly, () => load(true));
+
+        return { persons, total, loading, hasMore, search, namedOnly, load, onSearch, router, openMerge };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Persons</div>
+            <div class="view-count">{{ total }} total</div>
+            <div class="view-actions">
+                <div class="search-bar">
+                    <span class="search-icon">&#128269;</span>
+                    <input v-model="search" @input="onSearch" placeholder="Search name...">
+                </div>
+                <button
+                    class="btn btn-ghost"
+                    :class="{ 'btn-primary': namedOnly }"
+                    @click="namedOnly = !namedOnly"
+                    style="font-size:13px;padding:6px 12px"
+                >Named only</button>
+            </div>
+        </div>
+
+        <div v-if="loading && !persons.length" class="loading">
+            <div class="spinner"></div>
+            Loading persons...
+        </div>
+        <div v-else-if="!persons.length" class="empty">
+            <div class="empty-icon">&#128100;</div>
+            <div class="empty-text">No persons found</div>
+        </div>
+        <div v-else>
+            <div class="card-grid">
+                <div v-for="p in persons" :key="p.id" class="person-card">
+                    <img class="card-thumb" :src="p.thumb_url"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 180 180%22><rect fill=%22%231e293b%22 width=%22180%22 height=%22180%22/><text x=%2290%22 y=%2298%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2260%22>&#128100;</text></svg>'"
+                         @click="router.push('/persons/' + p.id)"
+                         :alt="p.name || 'Unknown'">
+                    <div class="card-info" @click="router.push('/persons/' + p.id)">
+                        <div class="card-name" :class="{ unnamed: !p.name }">{{ p.name || 'Unknown' }}</div>
+                        <div class="card-meta">{{ p.face_count }} faces</div>
+                    </div>
+                    <div class="card-actions">
+                        <button class="btn-sm" @click.stop="router.push('/persons/' + p.id)">View</button>
+                        <button class="btn-sm primary" @click.stop="openMerge(p)">Merge</button>
+                    </div>
+                </div>
+            </div>
+            <div class="load-more" v-if="hasMore">
+                <button class="btn btn-ghost" @click="load()" :disabled="loading">
+                    {{ loading ? 'Loading...' : 'Load more' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+const PersonDetailView = defineComponent({
+    setup() {
+        const route = useRoute();
+        const router = useRouter();
+        const person = ref(null);
+        const loading = ref(true);
+
+        async function load() {
+            loading.value = true;
+            try {
+                person.value = await api.get(`/api/persons/${route.params.id}`);
+            } catch (e) {
+                showToast('Failed to load person: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        onMounted(load);
+        watch(() => route.params.id, load);
+
+        return { person, loading, router, openMerge };
+    },
+    template: `
+    <div class="view">
+        <div class="back-link" @click="router.push('/persons')">&#8592; Persons</div>
+
+        <div v-if="loading" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!person" class="empty"><div class="empty-icon">&#9888;</div><div class="empty-text">Not found</div></div>
+        <div v-else>
+            <div class="person-detail-header">
+                <img class="person-detail-thumb" :src="person.thumb_url"
+                     onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 120 120%22><rect fill=%22%231e293b%22 width=%22120%22 height=%22120%22/><text x=%2260%22 y=%2274%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2250%22>&#128100;</text></svg>'"
+                     :alt="person.name || 'Unknown'">
+                <div class="person-detail-info">
+                    <div class="person-detail-name" :class="{ unnamed: !person.name }">
+                        {{ person.name || 'Unknown' }}
+                    </div>
+                    <div class="person-detail-meta">{{ person.face_count }} faces detected</div>
+                    <div class="person-detail-actions">
+                        <button class="btn btn-primary" @click="openMerge(person)">Merge into another</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section-title">Face crops ({{ person.faces.length }})</div>
+            <div v-if="!person.faces.length" class="empty" style="padding:30px">
+                <div class="empty-text">No face crops found</div>
+            </div>
+            <div class="face-grid">
+                <div v-for="f in person.faces" :key="f.id" class="face-card"
+                     @click="router.push('/assets/' + f.assetId)">
+                    <img :src="f.crop_url"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 120 120%22><rect fill=%22%231e293b%22 width=%22120%22 height=%22120%22/><text x=%2260%22 y=%2274%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2240%22>?</text></svg>'"
+                         :alt="'Face crop'">
+                    <div class="face-meta">
+                        <span class="face-score" v-if="f.score">{{ (f.score * 100).toFixed(0) }}%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+const AssetsView = defineComponent({
+    setup() {
+        const router = useRouter();
+        const assets = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const loading = ref(false);
+
+        const hasMore = computed(() => assets.value.length < total.value);
+
+        async function load(reset = false) {
+            if (loading.value) return;
+            if (reset) { page.value = 1; assets.value = []; }
+            loading.value = true;
+            try {
+                const data = await api.get(`/api/assets/with-faces?page=${page.value}&limit=50`);
+                if (reset) assets.value = data.items;
+                else assets.value.push(...data.items);
+                total.value = data.total;
+                page.value++;
+            } catch (e) {
+                showToast('Failed to load assets: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        onMounted(() => load(true));
+
+        function namedPct(a) {
+            if (!a.face_count) return 0;
+            return Math.round((a.named_count / a.face_count) * 100);
+        }
+
+        return { assets, total, loading, hasMore, load, router, namedPct };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Assets with faces</div>
+            <div class="view-count">{{ total }} assets</div>
+        </div>
+
+        <div v-if="loading && !assets.length" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!assets.length" class="empty">
+            <div class="empty-icon">&#128444;</div>
+            <div class="empty-text">No assets with faces</div>
+        </div>
+        <div v-else>
+            <div class="card-grid">
+                <div v-for="a in assets" :key="a.id" class="asset-card"
+                     @click="router.push('/assets/' + a.id)">
+                    <img class="card-thumb" :src="a.thumb_url"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 160%22><rect fill=%22%231e293b%22 width=%22160%22 height=%22160%22/><text x=%2280%22 y=%2290%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2250%22>&#128444;</text></svg>'"
+                         :alt="a.originalFileName">
+                    <div class="face-badge">{{ a.face_count }} face{{ a.face_count !== 1 ? 's' : '' }}</div>
+                    <div class="card-info">
+                        <div class="card-name">{{ a.originalFileName }}</div>
+                        <div class="named-bar">
+                            <div class="fill" :style="{ width: namedPct(a) + '%' }"></div>
+                        </div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">
+                            {{ a.named_count }}/{{ a.face_count }} named
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="load-more" v-if="hasMore">
+                <button class="btn btn-ghost" @click="load()" :disabled="loading">
+                    {{ loading ? 'Loading...' : 'Load more' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+const AssetDetailView = defineComponent({
+    setup() {
+        const route = useRoute();
+        const router = useRouter();
+        const faces = ref([]);
+        const loading = ref(true);
+        const assetId = computed(() => route.params.id);
+        const thumbUrl = computed(() => `/api/assets/${assetId.value}/thumbnail`);
+        const previewUrl = computed(() => `/api/assets/${assetId.value}/thumbnail`);
+
+        async function load() {
+            loading.value = true;
+            try {
+                const data = await api.get(`/api/assets/${assetId.value}/faces`);
+                faces.value = data.faces;
+            } catch (e) {
+                showToast('Failed to load asset faces: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        onMounted(load);
+        watch(assetId, load);
+
+        return { faces, loading, router, assetId, thumbUrl, previewUrl };
+    },
+    template: `
+    <div class="view">
+        <div class="back-link" @click="router.push('/assets')">&#8592; Assets</div>
+
+        <div v-if="loading" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else class="asset-detail-layout">
+            <div class="asset-preview">
+                <img :src="previewUrl"
+                     onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 400 300%22><rect fill=%22%231e293b%22 width=%22400%22 height=%22300%22/><text x=%22200%22 y=%22160%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2260%22>&#128444;</text></svg>'"
+                     alt="Asset preview">
+            </div>
+            <div class="asset-faces-sidebar">
+                <h3>Faces ({{ faces.length }})</h3>
+                <div v-if="!faces.length" class="empty" style="padding:20px 0">
+                    <div class="empty-text">No faces detected</div>
+                </div>
+                <div v-for="f in faces" :key="f.id" class="face-row"
+                     @click="f.person_id && router.push('/persons/' + f.person_id)">
+                    <img :src="f.crop_url"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 48 48%22><rect fill=%22%231e293b%22 width=%2248%22 height=%2248%22/><text x=%2224%22 y=%2230%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2222%22>?</text></svg>'"
+                         alt="">
+                    <div class="face-info">
+                        <div class="face-person" :class="{ unknown: !f.person_name }">
+                            {{ f.person_name || 'Unknown' }}
+                        </div>
+                        <div class="face-score-sm" v-if="f.score">{{ (f.score * 100).toFixed(0) }}% confidence</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+const UnassignedView = defineComponent({
+    setup() {
+        const router = useRouter();
+        const faces = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const loading = ref(false);
+
+        const hasMore = computed(() => faces.value.length < total.value);
+
+        async function load(reset = false) {
+            if (loading.value) return;
+            if (reset) { page.value = 1; faces.value = []; }
+            loading.value = true;
+            try {
+                const data = await api.get(`/api/faces/unassigned?page=${page.value}&limit=100`);
+                if (reset) faces.value = data.items;
+                else faces.value.push(...data.items);
+                total.value = data.total;
+                page.value++;
+            } catch (e) {
+                showToast('Failed to load unassigned faces: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        onMounted(() => load(true));
+
+        return { faces, total, loading, hasMore, load, router };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Unassigned faces</div>
+            <div class="view-count">{{ total }} total</div>
+        </div>
+
+        <div v-if="loading && !faces.length" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!faces.length" class="empty">
+            <div class="empty-icon">&#127881;</div>
+            <div class="empty-text">All faces are assigned to persons</div>
+        </div>
+        <div v-else>
+            <div class="face-grid">
+                <div v-for="f in faces" :key="f.id" class="face-card"
+                     @click="router.push('/assets/' + f.assetId)">
+                    <img :src="f.crop_url"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 120 120%22><rect fill=%22%231e293b%22 width=%22120%22 height=%22120%22/><text x=%2260%22 y=%2274%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2240%22>?</text></svg>'"
+                         alt="Unassigned face">
+                    <div class="face-meta">
+                        <span class="face-score" v-if="f.score">{{ (f.score * 100).toFixed(0) }}%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="load-more" v-if="hasMore">
+                <button class="btn btn-ghost" @click="load()" :disabled="loading">
+                    {{ loading ? 'Loading...' : 'Load more' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+const MergeLogView = defineComponent({
+    setup() {
+        const items = ref([]);
+        const loading = ref(true);
+
+        function formatDate(iso) {
+            if (!iso) return '';
+            return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+        }
+
+        onMounted(async () => {
+            try {
+                const data = await api.get('/api/merge-log?limit=200');
+                items.value = data.items;
+            } catch (e) {
+                showToast('Failed to load merge log: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        });
+
+        return { items, loading, formatDate };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Merge Log</div>
+            <div class="view-count">{{ items.length }} entries</div>
+        </div>
+
+        <div v-if="loading" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!items.length" class="empty">
+            <div class="empty-icon">&#128221;</div>
+            <div class="empty-text">No merges performed yet</div>
+        </div>
+        <table v-else class="merge-table">
+            <thead>
+                <tr>
+                    <th>Source (removed)</th>
+                    <th></th>
+                    <th>Target (kept)</th>
+                    <th>Faces moved</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr v-for="(item, idx) in items" :key="idx">
+                    <td>{{ item.source_person_name || '(unknown)' }}</td>
+                    <td class="arrow-cell">&#8594;</td>
+                    <td>{{ item.target_person_name || '(unknown)' }}</td>
+                    <td>{{ item.face_count_moved }}</td>
+                    <td>{{ formatDate(item.merged_at) }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+const router = createRouter({
+    history: createWebHistory(),
+    routes: [
+        { path: '/',           redirect: '/persons' },
+        { path: '/persons',    component: PersonsView },
+        { path: '/persons/:id', component: PersonDetailView },
+        { path: '/assets',     component: AssetsView },
+        { path: '/assets/:id', component: AssetDetailView },
+        { path: '/unassigned', component: UnassignedView },
+        { path: '/log',        component: MergeLogView },
+    ],
+    scrollBehavior: () => ({ top: 0 }),
+});
+
+// ---------------------------------------------------------------------------
+// Root App
+// ---------------------------------------------------------------------------
+const App = defineComponent({
+    components: { RouterView, MergeModal, ToastContainer },
+    setup() {
+        const route = useRoute();
+        const stats = ref(null);
+        const navOpen = ref(false);
+
+        async function loadStats() {
+            try {
+                stats.value = await api.get('/api/stats');
+            } catch {}
+        }
+
+        onMounted(loadStats);
+
+        function isActive(path) {
+            return route.path === path || route.path.startsWith(path + '/');
+        }
+
+        return { stats, isActive, navOpen };
+    },
+    template: `
+    <div class="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-title">Face Finder</div>
+            <div class="logo-sub">Immich face management</div>
+        </div>
+        <div class="sidebar-stats" v-if="stats">
+            <div class="stat-row">
+                <span>Named persons</span>
+                <span class="val">{{ stats.named_persons }}</span>
+            </div>
+            <div class="stat-row">
+                <span>Total persons</span>
+                <span class="val">{{ stats.total_persons }}</span>
+            </div>
+            <div class="stat-row">
+                <span>Total faces</span>
+                <span class="val">{{ stats.total_faces }}</span>
+            </div>
+            <div class="stat-row">
+                <span>Assets w/ faces</span>
+                <span class="val">{{ stats.assets_with_faces }}</span>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <div :class="['nav-link', { active: isActive('/persons') }]"
+                 @click="$router.push('/persons')">
+                <span class="nav-icon">&#128100;</span>
+                Persons
+            </div>
+            <div :class="['nav-link', { active: isActive('/assets') }]"
+                 @click="$router.push('/assets')">
+                <span class="nav-icon">&#128444;</span>
+                Assets
+            </div>
+            <div :class="['nav-link', { active: isActive('/unassigned') }]"
+                 @click="$router.push('/unassigned')">
+                <span class="nav-icon">&#10067;</span>
+                Unassigned
+                <span class="nav-badge" v-if="stats && stats.unassigned_faces">{{ stats.unassigned_faces }}</span>
+            </div>
+            <div :class="['nav-link', { active: isActive('/log') }]"
+                 @click="$router.push('/log')">
+                <span class="nav-icon">&#128221;</span>
+                Merge Log
+            </div>
+        </nav>
+    </div>
+    <div class="main-content">
+        <RouterView />
+    </div>
+    <MergeModal />
+    <ToastContainer />
+    `,
+});
+
+createApp(App).use(router).mount('#app');

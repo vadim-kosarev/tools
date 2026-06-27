@@ -135,6 +135,25 @@ services:
 #      - GF_SECURITY_ADMIN_PASSWORD=admin
 
   # ------------------------------------------------------------------------
+  face-finder:
+    build: ../face-finder
+    container_name: immich_face_finder
+    restart: unless-stopped
+    depends_on:
+      - database
+      - immich-server
+    environment:
+      IMMICH_DB_HOST: database
+      IMMICH_DB_PORT: 5432
+      IMMICH_DB_NAME: ${DB_DATABASE_NAME}
+      IMMICH_DB_USER: ${DB_USERNAME}
+      IMMICH_DB_PASSWORD: ${DB_PASSWORD}
+      IMMICH_URL: http://immich-server:2283
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+    ports:
+      - "8767:8767"
+
+  # ------------------------------------------------------------------------
   face-search:
     build: ../face-search
     container_name: immich_face_search
