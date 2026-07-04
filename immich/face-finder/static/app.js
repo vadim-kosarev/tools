@@ -621,6 +621,7 @@ const MergeLogView = defineComponent({
 const ffPersonModal = reactive({ show: false, person: null, loading: false, priorityVideoId: null, priorityTrackId: null });
 
 async function openFfPerson(localPersonId, priorityVideoId = null, priorityTrackId = null) {
+    closePhotoTooltip();
     ffPersonModal.show = true;
     ffPersonModal.person = null;
     ffPersonModal.loading = true;
@@ -746,11 +747,12 @@ const FfPersonModal = defineComponent({
 // ---------------------------------------------------------------------------
 // PhotoModal — fullscreen image viewer with prev/next navigation
 // ---------------------------------------------------------------------------
-const photoModal = reactive({ show: false, url: null, items: [], index: 0 });
+const photoModal = reactive({ show: false, url: null, items: [], index: 0, mode: 'modal', tooltipX: 0, tooltipY: 0 });
 
 // item: { thumb_url, filename?, frame_index?, total_frames?, fps?, start_time? }
 // or plain string URL (backward compat)
 function openPhoto(item, items = null) {
+    clearTimeout(_hoverTimer);
     const norm = i => (typeof i === 'string') ? { thumb_url: i } : (i || {});
     const normItem = norm(item);
     const list = (items && items.length) ? items.map(norm) : [normItem];
@@ -758,6 +760,7 @@ function openPhoto(item, items = null) {
     photoModal.items = list;
     photoModal.index = idx >= 0 ? idx : 0;
     photoModal.url = list[photoModal.index]?.thumb_url || null;
+    photoModal.mode = 'modal';
     photoModal.show = true;
 }
 
@@ -772,6 +775,29 @@ function nextPhoto() {
     if (photoModal.index < photoModal.items.length - 1) {
         photoModal.index++;
         photoModal.url = photoModal.items[photoModal.index].thumb_url;
+    }
+}
+
+let _hoverTimer = null;
+
+function openPhotoTooltip(event, item) {
+    clearTimeout(_hoverTimer);
+    const normItem = typeof item === 'string' ? { thumb_url: item } : item;
+    _hoverTimer = setTimeout(() => {
+        photoModal.items = [normItem];
+        photoModal.index = 0;
+        photoModal.url = normItem.thumb_url;
+        photoModal.mode = 'tooltip';
+        photoModal.tooltipX = event.clientX;
+        photoModal.tooltipY = event.clientY;
+        photoModal.show = true;
+    }, 550);
+}
+
+function closePhotoTooltip() {
+    clearTimeout(_hoverTimer);
+    if (photoModal.mode === 'tooltip') {
+        photoModal.show = false;
     }
 }
 
@@ -800,28 +826,41 @@ const PhotoModal = defineComponent({
             if (!it.start_time) return hms;
             const dt = new Date(it.start_time);
             dt.setSeconds(dt.getSeconds() + totalSecs);
-            const dateStr = dt.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
-            return dateStr + ' · ' + hms;
+            return dt.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' }) + ' · ' + hms;
         });
 
         return { m: photoModal, close, prev: prevPhoto, next: nextPhoto, currentItem, timelinePct, timeStr };
     },
     template: `
-    <div class="modal-overlay photo-overlay" v-if="m.show" @click="close">
-        <div class="photo-caption-top" v-if="currentItem.filename" @click.stop>{{ currentItem.filename }}</div>
-        <button class="photo-nav photo-nav-prev" v-if="m.index > 0" @click.stop="prev">&#8592;</button>
-        <img :src="m.url" class="photo-fullsize" @click.stop>
-        <button class="photo-nav photo-nav-next" v-if="m.index < m.items.length - 1" @click.stop="next">&#8594;</button>
-        <div class="photo-caption-bottom" v-if="timeStr || timelinePct != null" @click.stop>
-            <div class="photo-time" v-if="timeStr">{{ timeStr }}</div>
-            <div class="photo-timeline" v-if="timelinePct != null">
-                <div class="photo-timeline-track">
-                    <div class="photo-timeline-marker" :style="{left: timelinePct + '%'}"></div>
-                </div>
+<div class="modal-overlay photo-overlay" v-if="m.show && m.mode === 'modal'" @click="close">
+    <div class="photo-modal-top" v-if="currentItem.filename">{{ currentItem.filename }}</div>
+    <button class="photo-nav photo-nav-prev" v-if="m.index > 0" @click.stop="prev">&#8592;</button>
+    <img :src="m.url" class="photo-fullsize" @click.stop>
+    <button class="photo-nav photo-nav-next" v-if="m.index < m.items.length - 1" @click.stop="next">&#8594;</button>
+    <div class="photo-modal-bottom" v-if="timeStr || timelinePct != null">
+        <div class="photo-time" v-if="timeStr">{{ timeStr }}</div>
+        <div class="photo-timeline" v-if="timelinePct != null">
+            <div class="photo-timeline-track">
+                <div class="photo-timeline-marker" :style="{left: timelinePct + '%'}"></div>
             </div>
         </div>
-        <button class="ffp-close photo-close" @click="close">&#10005;</button>
     </div>
+    <button class="photo-close-btn" @click.stop="close">&#10005;</button>
+</div>
+<div class="photo-tooltip"
+     v-if="m.show && m.mode === 'tooltip'"
+     :style="{left: m.tooltipX + 'px', top: m.tooltipY + 'px'}">
+    <div class="photo-tooltip-header" v-if="currentItem.filename">{{ currentItem.filename }}</div>
+    <img :src="m.url" class="photo-tooltip-img">
+    <div class="photo-tooltip-footer" v-if="timeStr || timelinePct != null">
+        <div class="photo-time" v-if="timeStr">{{ timeStr }}</div>
+        <div class="photo-timeline" v-if="timelinePct != null">
+            <div class="photo-timeline-track">
+                <div class="photo-timeline-marker" :style="{left: timelinePct + '%'}"></div>
+            </div>
+        </div>
+    </div>
+</div>
     `,
 });
 
@@ -1032,7 +1071,7 @@ const VideoFilesView = defineComponent({
             return `${m}:${s.toString().padStart(2, '0')}`;
         }
 
-        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson };
+        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip };
     },
     template: `
     <div class="view">
@@ -1077,6 +1116,8 @@ const VideoFilesView = defineComponent({
                                     <img :src="s.thumb_url"
                                          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
                                          :title="(s.quality*100).toFixed(0)+'%'"
+                                         @mouseenter="openPhotoTooltip($event, {thumb_url: s.thumb_url, filename: f.filename, frame_index: s.frame_index, total_frames: f.total_frames, fps: f.fps, start_time: f.start_time})"
+                                         @mouseleave="closePhotoTooltip()"
                                          @click.stop="openFfPerson(p.local_person_id, f.id, s.face_track_id)">
                                 </div>
                             </div>
