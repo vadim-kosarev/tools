@@ -747,7 +747,7 @@ const FfPersonModal = defineComponent({
 // ---------------------------------------------------------------------------
 // PhotoModal — fullscreen image viewer with prev/next navigation
 // ---------------------------------------------------------------------------
-const photoModal = reactive({ show: false, url: null, items: [], index: 0, mode: 'modal', tooltipX: 0, tooltipY: 0 });
+const photoModal = reactive({ show: false, url: null, items: [], index: 0, mode: 'modal', tooltipX: 0, tooltipY: 0, tooltipAbove: false });
 
 // item: { thumb_url, filename?, frame_index?, total_frames?, fps?, start_time? }
 // or plain string URL (backward compat)
@@ -790,6 +790,7 @@ function openPhotoTooltip(event, item) {
         photoModal.mode = 'tooltip';
         photoModal.tooltipX = event.clientX;
         photoModal.tooltipY = event.clientY;
+        photoModal.tooltipAbove = (event.clientY + 380) > window.innerHeight;
         photoModal.show = true;
     }, 550);
 }
@@ -847,7 +848,7 @@ const PhotoModal = defineComponent({
     </div>
     <button class="photo-close-btn" @click.stop="close">&#10005;</button>
 </div>
-<div class="photo-tooltip"
+<div :class="['photo-tooltip', m.tooltipAbove ? 'above' : '']"
      v-if="m.show && m.mode === 'tooltip'"
      :style="{left: m.tooltipX + 'px', top: m.tooltipY + 'px'}">
     <div class="photo-tooltip-header" v-if="currentItem.filename">{{ currentItem.filename }}</div>
