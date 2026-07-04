@@ -1,6 +1,6 @@
 'use strict';
 
-const { createApp, ref, computed, watch, onMounted, reactive, provide, inject, defineComponent } = Vue;
+const { createApp, ref, computed, watch, nextTick, onMounted, onUnmounted, reactive, provide, inject, defineComponent } = Vue;
 const { createRouter, createWebHistory, useRouter, useRoute, RouterView, RouterLink } = VueRouter;
 
 // ---------------------------------------------------------------------------
@@ -616,12 +616,498 @@ const MergeLogView = defineComponent({
 });
 
 // ---------------------------------------------------------------------------
+// FfPersonModal — person detail popup (used from Videos view)
+// ---------------------------------------------------------------------------
+const ffPersonModal = reactive({ show: false, person: null, loading: false, priorityVideoId: null, priorityTrackId: null });
+
+async function openFfPerson(localPersonId, priorityVideoId = null, priorityTrackId = null) {
+    ffPersonModal.show = true;
+    ffPersonModal.person = null;
+    ffPersonModal.loading = true;
+    ffPersonModal.priorityVideoId = priorityVideoId;
+    ffPersonModal.priorityTrackId = priorityTrackId;
+    try {
+        ffPersonModal.person = await api.get(`/api/ff/persons/${localPersonId}`);
+    } catch (e) {
+        showToast('Failed to load person: ' + e.message, 'error');
+        ffPersonModal.show = false;
+    } finally {
+        ffPersonModal.loading = false;
+    }
+}
+
+const FfPersonModal = defineComponent({
+    setup() {
+        const router = useRouter();
+
+        function close() { ffPersonModal.show = false; }
+
+        function goToPersons() {
+            close();
+            router.push({ path: '/ff/persons', query: { q: ffPersonModal.person?.immich_person_name || ffPersonModal.person?.label } });
+        }
+
+        function goToFile(filename) {
+            close();
+            router.push({ path: '/videos', query: { q: filename } });
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '';
+            return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+        }
+
+        // Priority file first in files list
+        const sortedFiles = computed(() => {
+            const files = ffPersonModal.person?.files || [];
+            const pvid = ffPersonModal.priorityVideoId;
+            if (!pvid) return files;
+            const pri = files.filter(f => f.video_id === pvid);
+            const rest = files.filter(f => f.video_id !== pvid);
+            return [...pri, ...rest];
+        });
+
+        // Scroll priority file into view after data loads
+        const fileRefs = {};
+        watch(() => ffPersonModal.person, async (person) => {
+            if (!person || !ffPersonModal.priorityVideoId) return;
+            await nextTick();
+            const el = fileRefs[ffPersonModal.priorityVideoId];
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+
+        const BLANK = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect fill="%231e293b" width="64" height="64"/><text x="32" y="42" text-anchor="middle" fill="%23475569" font-size="28">&#128100;</text></svg>`;
+
+        function photoItem(seg, file) {
+            return {
+                thumb_url: seg.thumb_url,
+                filename: file.filename,
+                frame_index: seg.frame_index ?? null,
+                total_frames: file.total_frames ?? null,
+                fps: file.fps ?? null,
+                start_time: file.start_time ?? null,
+            };
+        }
+        const photoGallery = computed(() =>
+            sortedFiles.value.flatMap(f2 => (f2.segments || []).map(s => photoItem(s, f2)))
+        );
+
+        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery };
+    },
+    template: `
+    <div class="modal-overlay" v-if="m.show" @click.self="close">
+        <div class="modal ffp-modal">
+            <div v-if="m.loading" class="loading" style="padding:40px"><div class="spinner"></div>Loading...</div>
+            <div v-else-if="m.person">
+                <div class="ffp-header">
+                    <img class="ffp-avatar"
+                         :src="m.person.best_faces[0]?.thumb_url || BLANK"
+                         :onerror="'this.src=\\''+BLANK+'\\''"
+                         style="cursor:zoom-in"
+                         @click="openPhoto(m.person.best_faces[0], m.person.best_faces)">
+                    <div class="ffp-info">
+                        <div class="ffp-name">{{ m.person.immich_person_name || m.person.label }}</div>
+                        <div class="ffp-meta">
+                            {{ m.person.track_count }} tracks ·
+                            {{ m.person.files.length }} files ·
+                            {{ m.person.distinct_days }} day{{ m.person.distinct_days !== 1 ? 's' : '' }}
+                        </div>
+                    </div>
+                    <button class="btn btn-ghost" style="margin-left:auto" @click="goToPersons">All appearances →</button>
+                    <button class="ffp-close" @click="close">✕</button>
+                </div>
+
+                <div class="section-title" style="margin-top:16px">Files ({{ m.person.files.length }})</div>
+                <div class="ffp-files">
+                    <div v-for="f in sortedFiles" :key="f.video_id"
+                         class="ff-file-row"
+                         :class="{ 'ff-file-row--active': f.video_id === m.priorityVideoId }"
+                         :ref="el => { if (el) fileRefs[f.video_id] = el }">
+                        <div class="ff-file-name ffp-file-link" :title="f.filename" @click="goToFile(f.filename)">
+                            {{ f.filename }}
+                            <span style="color:var(--text-muted);font-size:10px;margin-left:6px">{{ formatDate(f.start_time) }}</span>
+                        </div>
+                        <div class="ff-file-thumbs">
+                            <img v-for="s in f.segments" :key="s.segment_id ?? ('ft'+s.face_track_id)"
+                                 :src="s.thumb_url"
+                                 :title="((s.quality||0)*100).toFixed(0) + '%'"
+                                 style="cursor:zoom-in"
+                                 @click="openPhoto(photoItem(s, f), photoGallery)"
+                                 :onerror="'this.src=\\''+BLANK+'\\''">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
+// PhotoModal — fullscreen image viewer with prev/next navigation
+// ---------------------------------------------------------------------------
+const photoModal = reactive({ show: false, url: null, items: [], index: 0 });
+
+// item: { thumb_url, filename?, frame_index?, total_frames?, fps?, start_time? }
+// or plain string URL (backward compat)
+function openPhoto(item, items = null) {
+    const norm = i => (typeof i === 'string') ? { thumb_url: i } : (i || {});
+    const normItem = norm(item);
+    const list = (items && items.length) ? items.map(norm) : [normItem];
+    const idx = list.findIndex(i => i.thumb_url === normItem.thumb_url);
+    photoModal.items = list;
+    photoModal.index = idx >= 0 ? idx : 0;
+    photoModal.url = list[photoModal.index]?.thumb_url || null;
+    photoModal.show = true;
+}
+
+function prevPhoto() {
+    if (photoModal.index > 0) {
+        photoModal.index--;
+        photoModal.url = photoModal.items[photoModal.index].thumb_url;
+    }
+}
+
+function nextPhoto() {
+    if (photoModal.index < photoModal.items.length - 1) {
+        photoModal.index++;
+        photoModal.url = photoModal.items[photoModal.index].thumb_url;
+    }
+}
+
+const PhotoModal = defineComponent({
+    setup() {
+        function close() { photoModal.show = false; }
+
+        const currentItem = computed(() => photoModal.items[photoModal.index] || {});
+
+        const timelinePct = computed(() => {
+            const it = currentItem.value;
+            if (it.frame_index == null || !it.total_frames) return null;
+            return +(it.frame_index / it.total_frames * 100).toFixed(1);
+        });
+
+        const timeStr = computed(() => {
+            const it = currentItem.value;
+            if (it.frame_index == null || !it.fps) return '';
+            const totalSecs = Math.round(it.frame_index / it.fps);
+            const h = Math.floor(totalSecs / 3600);
+            const m = Math.floor((totalSecs % 3600) / 60);
+            const s = totalSecs % 60;
+            const hms = h > 0
+                ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+                : `${m}:${String(s).padStart(2,'0')}`;
+            if (!it.start_time) return hms;
+            const dt = new Date(it.start_time);
+            dt.setSeconds(dt.getSeconds() + totalSecs);
+            const dateStr = dt.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
+            return dateStr + ' · ' + hms;
+        });
+
+        return { m: photoModal, close, prev: prevPhoto, next: nextPhoto, currentItem, timelinePct, timeStr };
+    },
+    template: `
+    <div class="modal-overlay photo-overlay" v-if="m.show" @click="close">
+        <div class="photo-caption-top" v-if="currentItem.filename" @click.stop>{{ currentItem.filename }}</div>
+        <button class="photo-nav photo-nav-prev" v-if="m.index > 0" @click.stop="prev">&#8592;</button>
+        <img :src="m.url" class="photo-fullsize" @click.stop>
+        <button class="photo-nav photo-nav-next" v-if="m.index < m.items.length - 1" @click.stop="next">&#8594;</button>
+        <div class="photo-caption-bottom" v-if="timeStr || timelinePct != null" @click.stop>
+            <div class="photo-time" v-if="timeStr">{{ timeStr }}</div>
+            <div class="photo-timeline" v-if="timelinePct != null">
+                <div class="photo-timeline-track">
+                    <div class="photo-timeline-marker" :style="{left: timelinePct + '%'}"></div>
+                </div>
+            </div>
+        </div>
+        <button class="ffp-close photo-close" @click="close">&#10005;</button>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
+// FfPersonsView
+// ---------------------------------------------------------------------------
+const FfPersonsView = defineComponent({
+    setup() {
+        const route = useRoute();
+        const persons = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const loading = ref(false);
+        const search = ref(route.query.q || '');
+        const fileFilter = ref('');
+        const sort = ref('tracks_desc');
+        const expanded = reactive({});
+        let searchTimer = null;
+
+        const hasMore = computed(() => persons.value.length < total.value);
+
+        const sortOptions = [
+            { value: 'tracks_desc', label: 'Most tracks' },
+            { value: 'tracks_asc',  label: 'Fewest tracks' },
+            { value: 'days_desc',   label: 'Most days' },
+            { value: 'days_asc',    label: 'Fewest days' },
+            { value: 'name_asc',    label: 'Name A→Z' },
+            { value: 'name_desc',   label: 'Name Z→A' },
+        ];
+
+        const dayFilters = [1, 2, 5, 10, 20];
+        const minDays = ref(1);
+
+        async function load(reset = false) {
+            if (loading.value) return;
+            if (reset) { page.value = 1; persons.value = []; }
+            loading.value = true;
+            try {
+                const q = search.value ? `&q=${encodeURIComponent(search.value)}` : '';
+                const days = minDays.value > 1 ? `&min_days=${minDays.value}` : '';
+                const data = await api.get(`/api/ff/persons?page=${page.value}&limit=20&sort=${sort.value}${q}${days}`);
+                if (reset) persons.value = data.items;
+                else persons.value.push(...data.items);
+                total.value = data.total;
+                page.value++;
+            } catch (e) {
+                showToast('Failed to load persons: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        function onSearch() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => load(true), 350);
+        }
+
+        function toggle(id) { expanded[id] = !expanded[id]; }
+
+        function visibleFiles(files) {
+            if (!fileFilter.value) return files;
+            const q = fileFilter.value.toLowerCase();
+            return files.filter(f => f.filename.toLowerCase().includes(q));
+        }
+
+        watch(sort, () => load(true));
+        watch(minDays, () => load(true));
+        onMounted(() => load(true));
+
+        const BLANK = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect fill="%231e293b" width="64" height="64"/><text x="32" y="42" text-anchor="middle" fill="%23475569" font-size="28">&#128100;</text></svg>`;
+
+        return { persons, total, loading, hasMore, load, search, fileFilter, sort, sortOptions,
+                 onSearch, toggle, expanded, visibleFiles, BLANK, dayFilters, minDays };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Persons</div>
+            <div class="view-count">{{ total }} total</div>
+            <div class="view-actions">
+                <div class="search-bar">
+                    <span class="search-icon">&#128269;</span>
+                    <input v-model="search" @input="onSearch" placeholder="Search person...">
+                </div>
+                <div class="search-bar">
+                    <span class="search-icon">&#127902;</span>
+                    <input v-model="fileFilter" placeholder="Filter by file...">
+                </div>
+                <select class="sort-select" v-model="sort">
+                    <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+            </div>
+        </div>
+        <div class="day-filter-bar">
+            <span class="day-filter-label">Days seen:</span>
+            <button v-for="d in dayFilters" :key="d"
+                    :class="['day-filter-btn', { active: minDays === d }]"
+                    @click="minDays = d">
+                {{ d === 1 ? 'Any' : d + '+' }}
+            </button>
+        </div>
+
+        <div v-if="loading && !persons.length" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!persons.length" class="empty">
+            <div class="empty-icon">&#128100;</div>
+            <div class="empty-text">No persons found</div>
+        </div>
+        <div v-else>
+            <div class="ff-person-list">
+                <div v-for="p in persons" :key="p.id" class="ff-person-card">
+                    <div class="ff-person-header" @click="toggle(p.id)">
+                        <img class="ff-person-avatar"
+                             :src="p.best_thumb_url || BLANK"
+                             :onerror="'this.src=\\''+BLANK+'\\''">
+                        <div class="ff-person-info">
+                            <div class="ff-person-name">{{ p.immich_person_name || p.label }}</div>
+                            <div class="ff-person-meta">{{ p.track_count }} tracks · {{ p.files.length }} files · {{ p.distinct_days }} day{{ p.distinct_days !== 1 ? 's' : '' }}</div>
+                        </div>
+                        <span class="ff-chevron">{{ expanded[p.id] ? '▾' : '▸' }}</span>
+                    </div>
+                    <div class="ff-person-files" v-if="expanded[p.id]">
+                        <div v-for="f in visibleFiles(p.files)" :key="f.video_id" class="ff-file-row">
+                            <div class="ff-file-name" :title="f.filename">{{ f.filename }}</div>
+                            <div class="ff-file-thumbs">
+                                <img v-for="t in f.tracks" :key="t.track_id"
+                                     :src="t.thumb_url"
+                                     :title="'quality: ' + (t.best_quality * 100).toFixed(0) + '%'"
+                                     :onerror="'this.src=\\''+BLANK+'\\''">
+                            </div>
+                        </div>
+                        <div v-if="visibleFiles(p.files).length === 0 && fileFilter" class="vf-no-persons">
+                            No files match "{{ fileFilter }}"
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="load-more" v-if="hasMore">
+                <button class="btn btn-ghost" @click="load()" :disabled="loading">
+                    {{ loading ? 'Loading...' : 'Load more' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
+// VideoFilesView
+// ---------------------------------------------------------------------------
+const VideoFilesView = defineComponent({
+    setup() {
+        const route = useRoute();
+        const files = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const loading = ref(false);
+        const search = ref(route.query.q || '');
+        const sort = ref('date_desc');
+        let searchTimer = null;
+
+        const hasMore = computed(() => files.value.length < total.value);
+
+        const sortOptions = [
+            { value: 'date_desc',    label: 'Newest first' },
+            { value: 'date_asc',     label: 'Oldest first' },
+            { value: 'name_asc',     label: 'Name A→Z' },
+            { value: 'name_desc',    label: 'Name Z→A' },
+            { value: 'persons_desc', label: 'Most persons' },
+            { value: 'persons_asc',  label: 'Fewest persons' },
+        ];
+
+        async function load(reset = false) {
+            if (loading.value) return;
+            if (reset) { page.value = 1; files.value = []; }
+            loading.value = true;
+            try {
+                const q = search.value ? `&q=${encodeURIComponent(search.value)}` : '';
+                const data = await api.get(`/api/ff/video-files?page=${page.value}&limit=50&sort=${sort.value}${q}`);
+                if (reset) files.value = data.items;
+                else files.value.push(...data.items);
+                total.value = data.total;
+                page.value++;
+            } catch (e) {
+                showToast('Failed to load video files: ' + e.message, 'error');
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        function onSearch() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => load(true), 350);
+        }
+
+        watch(sort, () => load(true));
+        onMounted(() => load(true));
+
+        function formatDate(iso) {
+            if (!iso) return '';
+            return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+        }
+
+        function duration(frames, fps) {
+            if (!frames || !fps) return '';
+            const secs = Math.round(frames / fps);
+            const m = Math.floor(secs / 60);
+            const s = secs % 60;
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson };
+    },
+    template: `
+    <div class="view">
+        <div class="view-header">
+            <div class="view-title">Video Files</div>
+            <div class="view-count">{{ total }} processed</div>
+            <div class="view-actions">
+                <div class="search-bar">
+                    <span class="search-icon">&#128269;</span>
+                    <input v-model="search" @input="onSearch" placeholder="Search filename...">
+                </div>
+                <select class="sort-select" v-model="sort">
+                    <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                </select>
+            </div>
+        </div>
+
+        <div v-if="loading && !files.length" class="loading"><div class="spinner"></div>Loading...</div>
+        <div v-else-if="!files.length" class="empty">
+            <div class="empty-icon">&#127902;</div>
+            <div class="empty-text">No processed video files</div>
+        </div>
+        <div v-else>
+            <div class="video-file-list">
+                <div v-for="f in files" :key="f.id" class="video-file-card">
+                    <div class="vf-filename">{{ f.filename }}</div>
+                    <div class="vf-meta">
+                        <span>{{ formatDate(f.start_time) }}</span>
+                        <span class="sep">·</span>
+                        <span>{{ duration(f.total_frames, f.fps) }}</span>
+                        <span class="sep">·</span>
+                        <span>{{ f.total_frames }} frames</span>
+                        <span class="sep">·</span>
+                        <span>{{ f.person_count }} person{{ f.person_count !== 1 ? 's' : '' }}</span>
+                        <span class="sep">·</span>
+                        <span>{{ f.track_count }} tracks</span>
+                    </div>
+                    <div class="vf-persons" v-if="f.persons && f.persons.length">
+                        <div v-for="p in f.persons" :key="p.local_person_id" class="vf-person">
+                            <div class="vf-person-thumbs">
+                                <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
+                                    <img :src="s.thumb_url"
+                                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
+                                         :title="(s.quality*100).toFixed(0)+'%'"
+                                         @click.stop="openFfPerson(p.local_person_id, f.id, s.face_track_id)">
+                                </div>
+                            </div>
+                            <div class="vf-person-name"
+                                 @click="openFfPerson(p.local_person_id, f.id)">
+                                {{ p.immich_person_name || p.label }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="vf-no-persons" v-else>No faces detected</div>
+                </div>
+            </div>
+            <div class="load-more" v-if="hasMore">
+                <button class="btn btn-ghost" @click="load()" :disabled="loading">
+                    {{ loading ? 'Loading...' : 'Load more' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    `,
+});
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 const router = createRouter({
     history: createWebHistory(),
     routes: [
-        { path: '/',           redirect: '/persons' },
+        { path: '/',           redirect: '/videos' },
+        { path: '/videos',     component: VideoFilesView },
+        { path: '/ff/persons', component: FfPersonsView },
         { path: '/persons',    component: PersonsView },
         { path: '/persons/:id', component: PersonDetailView },
         { path: '/assets',     component: AssetsView },
@@ -636,7 +1122,7 @@ const router = createRouter({
 // Root App
 // ---------------------------------------------------------------------------
 const App = defineComponent({
-    components: { RouterView, MergeModal, ToastContainer },
+    components: { RouterView, MergeModal, ToastContainer, FfPersonModal, PhotoModal },
     setup() {
         const route = useRoute();
         const stats = ref(null);
@@ -648,7 +1134,20 @@ const App = defineComponent({
             } catch {}
         }
 
-        onMounted(loadStats);
+        function onKeydown(e) {
+            if (photoModal.show) {
+                if (e.key === 'Escape')     { photoModal.show = false; return; }
+                if (e.key === 'ArrowLeft')  { prevPhoto(); return; }
+                if (e.key === 'ArrowRight') { nextPhoto(); return; }
+                return;
+            }
+            if (e.key !== 'Escape') return;
+            if (ffPersonModal.show) { ffPersonModal.show = false; return; }
+            if (mergeState.show)    { closeMerge(); return; }
+        }
+
+        onMounted(() => { loadStats(); document.addEventListener('keydown', onKeydown); });
+        onUnmounted(() => document.removeEventListener('keydown', onKeydown));
 
         function isActive(path) {
             return route.path === path || route.path.startsWith(path + '/');
@@ -681,8 +1180,13 @@ const App = defineComponent({
             </div>
         </div>
         <nav class="sidebar-nav">
-            <div :class="['nav-link', { active: isActive('/persons') }]"
-                 @click="$router.push('/persons')">
+            <div :class="['nav-link', { active: isActive('/videos') }]"
+                 @click="$router.push('/videos')">
+                <span class="nav-icon">&#127902;</span>
+                Videos
+            </div>
+            <div :class="['nav-link', { active: isActive('/ff/persons') }]"
+                 @click="$router.push('/ff/persons')">
                 <span class="nav-icon">&#128100;</span>
                 Persons
             </div>
@@ -708,6 +1212,8 @@ const App = defineComponent({
         <RouterView />
     </div>
     <MergeModal />
+    <FfPersonModal />
+    <PhotoModal />
     <ToastContainer />
     `,
 });
