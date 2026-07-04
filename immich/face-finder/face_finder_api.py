@@ -589,15 +589,19 @@ async def ff_video_files(
                         ft2.local_person_id,
                         lp.label,
                         lp.immich_person_name,
+                        -- segments from face_track_segments; fallback to best_face_jpeg row
                         json_agg(json_build_object(
-                            'track_id', ft2.id,
-                            'best_quality', ft2.best_quality
-                        ) ORDER BY ft2.best_quality DESC) AS tracks
+                            'segment_id', fts.id,
+                            'face_track_id', ft2.id,
+                            'quality', COALESCE(fts.quality, ft2.best_quality),
+                            'frame_index', COALESCE(fts.frame_index, ft2.best_frame_index)
+                        ) ORDER BY COALESCE(fts.frame_index, ft2.best_frame_index) ASC NULLS LAST) AS segments
                     FROM face_finder.face_tracks ft2
                     LEFT JOIN face_finder.local_persons lp ON lp.id = ft2.local_person_id
+                    LEFT JOIN face_finder.face_track_segments fts ON fts.face_track_id = ft2.id
                     WHERE ft2.video_id = vf.id
                     GROUP BY ft2.local_person_id, lp.label, lp.immich_person_name
-                    ORDER BY MAX(ft2.best_quality) DESC
+                    ORDER BY COALESCE(lp.immich_person_name, lp.label) ASC
                 ) p
             ) AS persons
         FROM face_finder.video_files vf
@@ -613,8 +617,11 @@ async def ff_video_files(
         d = dict(row)
         persons = d.get("persons") or []
         for p in persons:
-            for t in (p.get("tracks") or []):
-                t["thumb_url"] = f"/api/ff/face-tracks/{t['track_id']}/thumbnail"
+            for s in (p.get("segments") or []):
+                if s.get("segment_id"):
+                    s["thumb_url"] = f"/api/ff/face-track-segments/{s['segment_id']}/thumbnail"
+                else:
+                    s["thumb_url"] = f"/api/ff/face-tracks/{s['face_track_id']}/thumbnail"
         d["persons"] = persons
         items.append(d)
 
@@ -753,41 +760,66 @@ async def ff_person_detail(person_id: int) -> JSONResponse:
         raise HTTPException(404, "Person not found")
     person = dict(row)
 
-    # Top faces by quality (max 12)
+    # Top segment faces by quality (max 16), fallback to best_face_jpeg if no segments
     cur.execute("""
-        SELECT ft.id AS track_id, ft.best_quality, vf.filename
-        FROM face_finder.face_tracks ft
+        SELECT fts.id AS segment_id, fts.face_track_id, fts.quality, fts.frame_index,
+               vf.filename, vf.fps, vf.total_frames,
+               to_char(vf.start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS start_time
+        FROM face_finder.face_track_segments fts
+        JOIN face_finder.face_tracks ft ON ft.id = fts.face_track_id
         JOIN face_finder.video_files vf ON vf.id = ft.video_id
         WHERE ft.local_person_id = %s
-        ORDER BY ft.best_quality DESC
-        LIMIT 12
+        ORDER BY fts.quality DESC
+        LIMIT 16
     """, (person_id,))
-    person["best_faces"] = [
-        {**dict(r), "thumb_url": f"/api/ff/face-tracks/{r['track_id']}/thumbnail"}
-        for r in cur.fetchall()
-    ]
+    best_segs = cur.fetchall()
+    if best_segs:
+        person["best_faces"] = [
+            {**dict(r), "thumb_url": f"/api/ff/face-track-segments/{r['segment_id']}/thumbnail"}
+            for r in best_segs
+        ]
+    else:
+        cur.execute("""
+            SELECT ft.id AS face_track_id, NULL AS segment_id, ft.best_quality AS quality, vf.filename
+            FROM face_finder.face_tracks ft
+            JOIN face_finder.video_files vf ON vf.id = ft.video_id
+            WHERE ft.local_person_id = %s
+            ORDER BY ft.best_quality DESC LIMIT 16
+        """, (person_id,))
+        person["best_faces"] = [
+            {**dict(r), "thumb_url": f"/api/ff/face-tracks/{r['face_track_id']}/thumbnail"}
+            for r in cur.fetchall()
+        ]
 
-    # All files with face thumbnails
+    # All files with segments per file, sorted chronologically
     cur.execute("""
         SELECT
             vf.id AS video_id,
             vf.filename,
+            vf.fps,
+            vf.total_frames,
             to_char(vf.start_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS start_time,
             json_agg(json_build_object(
-                'track_id', ft.id,
-                'best_quality', ft.best_quality
-            ) ORDER BY ft.best_quality DESC) AS tracks
+                'segment_id', fts.id,
+                'face_track_id', ft.id,
+                'quality', COALESCE(fts.quality, ft.best_quality),
+                'frame_index', COALESCE(fts.frame_index, ft.best_frame_index)
+            ) ORDER BY COALESCE(fts.frame_index, ft.best_frame_index) ASC NULLS LAST) AS segments
         FROM face_finder.face_tracks ft
         JOIN face_finder.video_files vf ON vf.id = ft.video_id
+        LEFT JOIN face_finder.face_track_segments fts ON fts.face_track_id = ft.id
         WHERE ft.local_person_id = %s
-        GROUP BY vf.id, vf.filename, vf.start_time
+        GROUP BY vf.id, vf.filename, vf.fps, vf.total_frames, vf.start_time
         ORDER BY vf.start_time DESC
     """, (person_id,))
     files = []
     for r in cur.fetchall():
         f = dict(r)
-        for t in (f.get("tracks") or []):
-            t["thumb_url"] = f"/api/ff/face-tracks/{t['track_id']}/thumbnail"
+        for s in (f.get("segments") or []):
+            if s.get("segment_id"):
+                s["thumb_url"] = f"/api/ff/face-track-segments/{s['segment_id']}/thumbnail"
+            else:
+                s["thumb_url"] = f"/api/ff/face-tracks/{s['face_track_id']}/thumbnail"
         files.append(f)
     person["files"] = files
 
@@ -808,6 +840,19 @@ async def ff_face_track_thumbnail(track_id: int) -> Response:
     if not row or not row["best_face_jpeg"]:
         raise HTTPException(404, "No thumbnail for this track")
     return Response(content=bytes(row["best_face_jpeg"]), media_type="image/jpeg")
+
+
+
+@app.get("/api/ff/face-track-segments/{segment_id}/thumbnail")
+async def ff_face_track_segment_thumbnail(segment_id: int) -> Response:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT jpeg FROM face_finder.face_track_segments WHERE id = %s", (segment_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row or not row["jpeg"]:
+        raise HTTPException(404, "No thumbnail for this segment")
+    return Response(content=bytes(row["jpeg"]), media_type="image/jpeg")
 
 
 # ---------------------------------------------------------------------------

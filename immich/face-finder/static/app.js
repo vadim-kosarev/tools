@@ -1,6 +1,6 @@
 'use strict';
 
-const { createApp, ref, computed, watch, onMounted, onUnmounted, reactive, provide, inject, defineComponent } = Vue;
+const { createApp, ref, computed, watch, nextTick, onMounted, onUnmounted, reactive, provide, inject, defineComponent } = Vue;
 const { createRouter, createWebHistory, useRouter, useRoute, RouterView, RouterLink } = VueRouter;
 
 // ---------------------------------------------------------------------------
@@ -618,12 +618,14 @@ const MergeLogView = defineComponent({
 // ---------------------------------------------------------------------------
 // FfPersonModal — person detail popup (used from Videos view)
 // ---------------------------------------------------------------------------
-const ffPersonModal = reactive({ show: false, person: null, loading: false });
+const ffPersonModal = reactive({ show: false, person: null, loading: false, priorityVideoId: null, priorityTrackId: null });
 
-async function openFfPerson(localPersonId) {
+async function openFfPerson(localPersonId, priorityVideoId = null, priorityTrackId = null) {
     ffPersonModal.show = true;
     ffPersonModal.person = null;
     ffPersonModal.loading = true;
+    ffPersonModal.priorityVideoId = priorityVideoId;
+    ffPersonModal.priorityTrackId = priorityTrackId;
     try {
         ffPersonModal.person = await api.get(`/api/ff/persons/${localPersonId}`);
     } catch (e) {
@@ -655,9 +657,42 @@ const FfPersonModal = defineComponent({
             return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
         }
 
+        // Priority file first in files list
+        const sortedFiles = computed(() => {
+            const files = ffPersonModal.person?.files || [];
+            const pvid = ffPersonModal.priorityVideoId;
+            if (!pvid) return files;
+            const pri = files.filter(f => f.video_id === pvid);
+            const rest = files.filter(f => f.video_id !== pvid);
+            return [...pri, ...rest];
+        });
+
+        // Scroll priority file into view after data loads
+        const fileRefs = {};
+        watch(() => ffPersonModal.person, async (person) => {
+            if (!person || !ffPersonModal.priorityVideoId) return;
+            await nextTick();
+            const el = fileRefs[ffPersonModal.priorityVideoId];
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+
         const BLANK = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect fill="%231e293b" width="64" height="64"/><text x="32" y="42" text-anchor="middle" fill="%23475569" font-size="28">&#128100;</text></svg>`;
 
-        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, formatDate, BLANK };
+        function photoItem(seg, file) {
+            return {
+                thumb_url: seg.thumb_url,
+                filename: file.filename,
+                frame_index: seg.frame_index ?? null,
+                total_frames: file.total_frames ?? null,
+                fps: file.fps ?? null,
+                start_time: file.start_time ?? null,
+            };
+        }
+        const photoGallery = computed(() =>
+            sortedFiles.value.flatMap(f2 => (f2.segments || []).map(s => photoItem(s, f2)))
+        );
+
+        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery };
     },
     template: `
     <div class="modal-overlay" v-if="m.show" @click.self="close">
@@ -667,7 +702,9 @@ const FfPersonModal = defineComponent({
                 <div class="ffp-header">
                     <img class="ffp-avatar"
                          :src="m.person.best_faces[0]?.thumb_url || BLANK"
-                         :onerror="'this.src=\\''+BLANK+'\\''">
+                         :onerror="'this.src=\\''+BLANK+'\\''"
+                         style="cursor:zoom-in"
+                         @click="openPhoto(m.person.best_faces[0], m.person.best_faces)">
                     <div class="ffp-info">
                         <div class="ffp-name">{{ m.person.immich_person_name || m.person.label }}</div>
                         <div class="ffp-meta">
@@ -680,29 +717,22 @@ const FfPersonModal = defineComponent({
                     <button class="ffp-close" @click="close">✕</button>
                 </div>
 
-                <div class="section-title" style="margin-top:16px">Best faces</div>
-                <div class="ffp-faces">
-                    <img v-for="f in m.person.best_faces" :key="f.track_id"
-                         :src="f.thumb_url"
-                         :title="f.filename + ' · ' + (f.best_quality*100).toFixed(0) + '%'"
-                         :onerror="'this.src=\\''+BLANK+'\\''"
-                         style="cursor:zoom-in"
-                         @click="openPhoto(f.thumb_url)">
-                </div>
-
                 <div class="section-title" style="margin-top:16px">Files ({{ m.person.files.length }})</div>
                 <div class="ffp-files">
-                    <div v-for="f in m.person.files" :key="f.video_id" class="ff-file-row">
+                    <div v-for="f in sortedFiles" :key="f.video_id"
+                         class="ff-file-row"
+                         :class="{ 'ff-file-row--active': f.video_id === m.priorityVideoId }"
+                         :ref="el => { if (el) fileRefs[f.video_id] = el }">
                         <div class="ff-file-name ffp-file-link" :title="f.filename" @click="goToFile(f.filename)">
                             {{ f.filename }}
                             <span style="color:var(--text-muted);font-size:10px;margin-left:6px">{{ formatDate(f.start_time) }}</span>
                         </div>
                         <div class="ff-file-thumbs">
-                            <img v-for="t in f.tracks" :key="t.track_id"
-                                 :src="t.thumb_url"
-                                 :title="(t.best_quality*100).toFixed(0) + '%'"
+                            <img v-for="s in f.segments" :key="s.segment_id ?? ('ft'+s.face_track_id)"
+                                 :src="s.thumb_url"
+                                 :title="((s.quality||0)*100).toFixed(0) + '%'"
                                  style="cursor:zoom-in"
-                                 @click="openPhoto(t.thumb_url)"
+                                 @click="openPhoto(photoItem(s, f), photoGallery)"
                                  :onerror="'this.src=\\''+BLANK+'\\''">
                         </div>
                     </div>
@@ -714,24 +744,83 @@ const FfPersonModal = defineComponent({
 });
 
 // ---------------------------------------------------------------------------
-// PhotoModal — fullscreen image viewer (one modal level: closes person modal first)
+// PhotoModal — fullscreen image viewer with prev/next navigation
 // ---------------------------------------------------------------------------
-const photoModal = reactive({ show: false, url: null });
+const photoModal = reactive({ show: false, url: null, items: [], index: 0 });
 
-function openPhoto(url) {
-    photoModal.url = url;
+// item: { thumb_url, filename?, frame_index?, total_frames?, fps?, start_time? }
+// or plain string URL (backward compat)
+function openPhoto(item, items = null) {
+    const norm = i => (typeof i === 'string') ? { thumb_url: i } : (i || {});
+    const normItem = norm(item);
+    const list = (items && items.length) ? items.map(norm) : [normItem];
+    const idx = list.findIndex(i => i.thumb_url === normItem.thumb_url);
+    photoModal.items = list;
+    photoModal.index = idx >= 0 ? idx : 0;
+    photoModal.url = list[photoModal.index]?.thumb_url || null;
     photoModal.show = true;
+}
+
+function prevPhoto() {
+    if (photoModal.index > 0) {
+        photoModal.index--;
+        photoModal.url = photoModal.items[photoModal.index].thumb_url;
+    }
+}
+
+function nextPhoto() {
+    if (photoModal.index < photoModal.items.length - 1) {
+        photoModal.index++;
+        photoModal.url = photoModal.items[photoModal.index].thumb_url;
+    }
 }
 
 const PhotoModal = defineComponent({
     setup() {
         function close() { photoModal.show = false; }
-        return { m: photoModal, close };
+
+        const currentItem = computed(() => photoModal.items[photoModal.index] || {});
+
+        const timelinePct = computed(() => {
+            const it = currentItem.value;
+            if (it.frame_index == null || !it.total_frames) return null;
+            return +(it.frame_index / it.total_frames * 100).toFixed(1);
+        });
+
+        const timeStr = computed(() => {
+            const it = currentItem.value;
+            if (it.frame_index == null || !it.fps) return '';
+            const totalSecs = Math.round(it.frame_index / it.fps);
+            const h = Math.floor(totalSecs / 3600);
+            const m = Math.floor((totalSecs % 3600) / 60);
+            const s = totalSecs % 60;
+            const hms = h > 0
+                ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+                : `${m}:${String(s).padStart(2,'0')}`;
+            if (!it.start_time) return hms;
+            const dt = new Date(it.start_time);
+            dt.setSeconds(dt.getSeconds() + totalSecs);
+            const dateStr = dt.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
+            return dateStr + ' · ' + hms;
+        });
+
+        return { m: photoModal, close, prev: prevPhoto, next: nextPhoto, currentItem, timelinePct, timeStr };
     },
     template: `
     <div class="modal-overlay photo-overlay" v-if="m.show" @click="close">
+        <div class="photo-caption-top" v-if="currentItem.filename" @click.stop>{{ currentItem.filename }}</div>
+        <button class="photo-nav photo-nav-prev" v-if="m.index > 0" @click.stop="prev">&#8592;</button>
         <img :src="m.url" class="photo-fullsize" @click.stop>
-        <button class="ffp-close photo-close" @click="close">✕</button>
+        <button class="photo-nav photo-nav-next" v-if="m.index < m.items.length - 1" @click.stop="next">&#8594;</button>
+        <div class="photo-caption-bottom" v-if="timeStr || timelinePct != null" @click.stop>
+            <div class="photo-time" v-if="timeStr">{{ timeStr }}</div>
+            <div class="photo-timeline" v-if="timelinePct != null">
+                <div class="photo-timeline-track">
+                    <div class="photo-timeline-marker" :style="{left: timelinePct + '%'}"></div>
+                </div>
+            </div>
+        </div>
+        <button class="ffp-close photo-close" @click="close">&#10005;</button>
     </div>
     `,
 });
@@ -982,17 +1071,19 @@ const VideoFilesView = defineComponent({
                         <span>{{ f.track_count }} tracks</span>
                     </div>
                     <div class="vf-persons" v-if="f.persons && f.persons.length">
-                        <div v-for="p in f.persons" :key="p.local_person_id" class="vf-person"
-                             @click="openFfPerson(p.local_person_id)">
+                        <div v-for="p in f.persons" :key="p.local_person_id" class="vf-person">
                             <div class="vf-person-thumbs">
-                                <div class="vf-thumb-wrap" v-for="(t, i) in p.tracks" :key="t.track_id">
-                                    <img :src="t.thumb_url"
+                                <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
+                                    <img :src="s.thumb_url"
                                          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
-                                         :title="(t.best_quality*100).toFixed(0)+'%'">
-                                    <span class="vf-track-badge" v-if="i === 0 && p.tracks.length > 1">×{{ p.tracks.length }}</span>
+                                         :title="(s.quality*100).toFixed(0)+'%'"
+                                         @click.stop="openFfPerson(p.local_person_id, f.id, s.face_track_id)">
                                 </div>
                             </div>
-                            <div class="vf-person-name">{{ p.immich_person_name || p.label }}</div>
+                            <div class="vf-person-name"
+                                 @click="openFfPerson(p.local_person_id, f.id)">
+                                {{ p.immich_person_name || p.label }}
+                            </div>
                         </div>
                     </div>
                     <div class="vf-no-persons" v-else>No faces detected</div>
@@ -1044,10 +1135,15 @@ const App = defineComponent({
         }
 
         function onKeydown(e) {
+            if (photoModal.show) {
+                if (e.key === 'Escape')     { photoModal.show = false; return; }
+                if (e.key === 'ArrowLeft')  { prevPhoto(); return; }
+                if (e.key === 'ArrowRight') { nextPhoto(); return; }
+                return;
+            }
             if (e.key !== 'Escape') return;
-            if (photoModal.show)       { photoModal.show = false; return; }
-            if (ffPersonModal.show)    { ffPersonModal.show = false; return; }
-            if (mergeState.show)       { closeMerge(); return; }
+            if (ffPersonModal.show) { ffPersonModal.show = false; return; }
+            if (mergeState.show)    { closeMerge(); return; }
         }
 
         onMounted(() => { loadStats(); document.addEventListener('keydown', onKeydown); });
