@@ -89,11 +89,13 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _get_conn() -> psycopg2.extensions.connection:
-    return _get_pool().getconn()
-
-
-def _put_conn(conn: psycopg2.extensions.connection) -> None:
-    _get_pool().putconn(conn)
+    """Direct connection for one-shot use — caller must call conn.close()."""
+    return psycopg2.connect(
+        host=IMMICH_DB_HOST, port=IMMICH_DB_PORT,
+        dbname=IMMICH_DB_NAME, user=IMMICH_DB_USER,
+        password=IMMICH_DB_PASSWORD,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
 
 
 @contextmanager
