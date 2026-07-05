@@ -772,6 +772,27 @@ body {
 }
 .day-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
 .day-filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.letter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.letter-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 34px;
+  text-align: center;
+  transition: all 0.15s;
+}
+.letter-btn:hover { border-color: var(--accent); color: var(--accent); }
+.letter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* FF Persons list */
 .ff-person-list { display: flex; flex-direction: column; gap: 12px; }

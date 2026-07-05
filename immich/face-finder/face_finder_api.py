@@ -550,18 +550,40 @@ _FF_SORT_MAP = {
 }
 
 
+@app.get("/api/ff/video-files/letters")
+async def ff_video_files_letters() -> JSONResponse:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT UPPER(LEFT(filename, 1)) AS letter
+        FROM face_finder.video_files
+        ORDER BY letter
+    """)
+    letters = [row["letter"] for row in cur.fetchall()]
+    conn.close()
+    return JSONResponse({"letters": letters})
+
+
 @app.get("/api/ff/video-files")
 async def ff_video_files(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     q: Optional[str] = Query(None),
+    letter: Optional[str] = Query(None),
     sort: str = Query("date_desc"),
 ) -> JSONResponse:
     offset = (page - 1) * limit
     order_by = _FF_SORT_MAP.get(sort, _FF_SORT_MAP["date_desc"])
 
-    where = "WHERE vf.filename ILIKE %s" if q else ""
-    params_filter: list = [f"%{q}%"] if q else []
+    clauses: list[str] = []
+    params_filter: list = []
+    if q:
+        clauses.append("vf.filename ILIKE %s")
+        params_filter.append(f"%{q}%")
+    if letter:
+        clauses.append("UPPER(LEFT(vf.filename, 1)) = %s")
+        params_filter.append(letter.upper()[:1])
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
     conn = _get_conn()
     cur = conn.cursor()

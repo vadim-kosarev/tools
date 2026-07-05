@@ -731,6 +731,7 @@ const FfPersonModal = defineComponent({
                         <div class="ff-file-thumbs">
                             <img v-for="s in f.segments" :key="s.segment_id ?? ('ft'+s.face_track_id)"
                                  :src="s.thumb_url"
+                                 loading="lazy"
                                  :title="((s.quality||0)*100).toFixed(0) + '%'"
                                  style="cursor:zoom-in"
                                  @mouseenter="openPhotoTooltip($event, photoItem(s, f))"
@@ -991,6 +992,7 @@ const FfPersonsView = defineComponent({
                             <div class="ff-file-thumbs">
                                 <img v-for="t in f.tracks" :key="t.track_id"
                                      :src="t.thumb_url"
+                                     loading="lazy"
                                      :title="'quality: ' + (t.best_quality * 100).toFixed(0) + '%'"
                                      :onerror="'this.src=\\''+BLANK+'\\''">
                             </div>
@@ -1026,6 +1028,21 @@ const VideoFilesView = defineComponent({
         let searchTimer = null;
 
         const hasMore = computed(() => files.value.length < total.value);
+        const letters = ref([]);
+        const activeLetter = ref('');
+
+        async function loadLetters() {
+            try {
+                const data = await api.get('/api/ff/video-files/letters');
+                letters.value = data.letters;
+            } catch {}
+        }
+
+        function selectLetter(l) {
+            activeLetter.value = activeLetter.value === l ? '' : l;
+            search.value = '';
+            load(true);
+        }
 
         const sortOptions = [
             { value: 'date_desc',    label: 'Newest first' },
@@ -1041,8 +1058,9 @@ const VideoFilesView = defineComponent({
             if (reset) { page.value = 1; files.value = []; }
             loading.value = true;
             try {
-                const q = search.value ? `&q=${encodeURIComponent(search.value)}` : '';
-                const data = await api.get(`/api/ff/video-files?page=${page.value}&limit=50&sort=${sort.value}${q}`);
+                const q  = search.value      ? `&q=${encodeURIComponent(search.value)}`           : '';
+                const lt = activeLetter.value ? `&letter=${encodeURIComponent(activeLetter.value)}` : '';
+                const data = await api.get(`/api/ff/video-files?page=${page.value}&limit=50&sort=${sort.value}${q}${lt}`);
                 if (reset) files.value = data.items;
                 else files.value.push(...data.items);
                 total.value = data.total;
@@ -1059,8 +1077,19 @@ const VideoFilesView = defineComponent({
             searchTimer = setTimeout(() => load(true), 350);
         }
 
+        const sentinel = ref(null);
+        watch(sentinel, (el, _, onCleanup) => {
+            if (!el) return;
+            const io = new IntersectionObserver(entries => {
+                if (entries[0].isIntersecting && hasMore.value && !loading.value) load();
+            }, { rootMargin: '300px' });
+            io.observe(el);
+            onCleanup(() => io.disconnect());
+        });
+
         watch(sort, () => load(true));
-        onMounted(() => load(true));
+        watch(() => route.query.q, (q) => { search.value = q || ''; activeLetter.value = ''; load(true); });
+        onMounted(() => { load(true); loadLetters(); });
 
         function formatDate(iso) {
             if (!iso) return '';
@@ -1075,7 +1104,7 @@ const VideoFilesView = defineComponent({
             return `${m}:${s.toString().padStart(2, '0')}`;
         }
 
-        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip };
+        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip, sentinel, letters, activeLetter, selectLetter };
     },
     template: `
     <div class="view">
@@ -1091,6 +1120,12 @@ const VideoFilesView = defineComponent({
                     <option v-for="o in sortOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
                 </select>
             </div>
+        </div>
+
+        <div class="letter-bar" v-if="letters.length">
+            <button v-for="l in letters" :key="l"
+                    :class="['letter-btn', { active: activeLetter === l }]"
+                    @click="selectLetter(l)">{{ l }}</button>
         </div>
 
         <div v-if="loading && !files.length" class="loading"><div class="spinner"></div>Loading...</div>
@@ -1118,6 +1153,7 @@ const VideoFilesView = defineComponent({
                             <div class="vf-person-thumbs">
                                 <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
                                     <img :src="s.thumb_url"
+                                         loading="lazy"
                                          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
                                          :title="(s.quality*100).toFixed(0)+'%'"
                                          @mouseenter="openPhotoTooltip($event, {thumb_url: s.thumb_url, filename: f.filename, frame_index: s.frame_index, total_frames: f.total_frames, fps: f.fps, start_time: f.start_time})"
@@ -1134,11 +1170,8 @@ const VideoFilesView = defineComponent({
                     <div class="vf-no-persons" v-else>No faces detected</div>
                 </div>
             </div>
-            <div class="load-more" v-if="hasMore">
-                <button class="btn btn-ghost" @click="load()" :disabled="loading">
-                    {{ loading ? 'Loading...' : 'Load more' }}
-                </button>
-            </div>
+            <div ref="sentinel"></div>
+            <div v-if="loading && files.length" class="loading" style="padding:20px 0"><div class="spinner"></div></div>
         </div>
     </div>
     `,
