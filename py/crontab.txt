@@ -1,0 +1,2 @@
+30 0 * * * "C:\Program Files\Python312\python.exe" findDuplicates.v.1.0.py --csv findDuplicates.csv --delete --no-confirm --keep-last X:\YD-Photos\Sorted
+50 23 * * * "C:\Program Files\Python312\python.exe" _sort_ydisk_photos.py

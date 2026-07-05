@@ -1,0 +1,2 @@
+immich/face-indexer/entrypoint.sh text eol=lf
+immich/face-indexer/crontab text eol=lf

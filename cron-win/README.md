@@ -3,8 +3,8 @@
 - начальный файл - C:\crontab.txt
 - формат строк в crontab.txt:
 ```
+Path: C:\dev\tools\cron-win
 Path: C:\dev\vsnifer
-Path: "Path: H:\vkshare\Cal lRec"
 * * * * * powershell -File run.ps1
 * * * * * powershell -File "run with spaces.ps1"
 ```

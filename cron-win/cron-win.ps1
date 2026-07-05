@@ -208,13 +208,29 @@ function Get-ScriptNameFromCommand {
     if ($Command -match '-[Ff]ile\s+(\S+)') {
         return [System.IO.Path]::GetFileName($Matches[1])
     }
-    # Full path as first token
-    if ($Command -match '^"([A-Za-z]:[^"]+)"') {
-        return [System.IO.Path]::GetFileName($Matches[1])
+
+    # Full path to an interpreter/exe as first token (e.g. python.exe, node.exe):
+    # prefer the script argument that follows it, so multiple scripts run through
+    # the same interpreter don't collide on the interpreter's own filename.
+    $rest = $null
+    if ($Command -match '^"([A-Za-z]:[^"]+)"\s*(.*)$') {
+        $exeName = [System.IO.Path]::GetFileName($Matches[1])
+        $rest    = $Matches[2]
+    } elseif ($Command -match '^([A-Za-z]:\S+)\s*(.*)$') {
+        $exeName = [System.IO.Path]::GetFileName($Matches[1])
+        $rest    = $Matches[2]
     }
-    if ($Command -match '^([A-Za-z]:\S+)') {
-        return [System.IO.Path]::GetFileName($Matches[1])
+
+    if ($null -ne $rest) {
+        if ($rest -match '"([^"]+\.(py|ps1|js|rb|sh|bat|cmd|pl))"') {
+            return [System.IO.Path]::GetFileName($Matches[1])
+        }
+        if ($rest -match '(\S+\.(py|ps1|js|rb|sh|bat|cmd|pl))\b') {
+            return [System.IO.Path]::GetFileName($Matches[1])
+        }
+        return $exeName
     }
+
     # Fallback: sanitize command string
     return ($Command -replace '[\\/:*?"<>|]', '_' -replace '\s+', '_')
 }
