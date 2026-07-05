@@ -693,7 +693,7 @@ const FfPersonModal = defineComponent({
             sortedFiles.value.flatMap(f2 => (f2.segments || []).map(s => photoItem(s, f2)))
         );
 
-        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery };
+        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, openPhotoTooltip, closePhotoTooltip, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery };
     },
     template: `
     <div class="modal-overlay" v-if="m.show" @click.self="close">
@@ -733,6 +733,8 @@ const FfPersonModal = defineComponent({
                                  :src="s.thumb_url"
                                  :title="((s.quality||0)*100).toFixed(0) + '%'"
                                  style="cursor:zoom-in"
+                                 @mouseenter="openPhotoTooltip($event, photoItem(s, f))"
+                                 @mouseleave="closePhotoTooltip()"
                                  @click="openPhoto(photoItem(s, f), photoGallery)"
                                  :onerror="'this.src=\\''+BLANK+'\\''">
                         </div>
@@ -747,7 +749,7 @@ const FfPersonModal = defineComponent({
 // ---------------------------------------------------------------------------
 // PhotoModal — fullscreen image viewer with prev/next navigation
 // ---------------------------------------------------------------------------
-const photoModal = reactive({ show: false, url: null, items: [], index: 0, mode: 'modal', tooltipX: 0, tooltipY: 0, tooltipAbove: false });
+const photoModal = reactive({ show: false, url: null, items: [], index: 0, mode: 'modal', tooltipX: 0, tooltipY: 0, tooltipAbove: false, tooltipLeft: false });
 
 // item: { thumb_url, filename?, frame_index?, total_frames?, fps?, start_time? }
 // or plain string URL (backward compat)
@@ -791,6 +793,7 @@ function openPhotoTooltip(event, item) {
         photoModal.tooltipX = event.clientX;
         photoModal.tooltipY = event.clientY;
         photoModal.tooltipAbove = (event.clientY + 380) > window.innerHeight;
+        photoModal.tooltipLeft  = (event.clientX + 290) > window.innerWidth;
         photoModal.show = true;
     }, 550);
 }
@@ -848,7 +851,7 @@ const PhotoModal = defineComponent({
     </div>
     <button class="photo-close-btn" @click.stop="close">&#10005;</button>
 </div>
-<div :class="['photo-tooltip', m.tooltipAbove ? 'above' : '']"
+<div :class="['photo-tooltip', {above: m.tooltipAbove, left: m.tooltipLeft}]"
      v-if="m.show && m.mode === 'tooltip'"
      :style="{left: m.tooltipX + 'px', top: m.tooltipY + 'px'}">
     <div class="photo-tooltip-header" v-if="currentItem.filename">{{ currentItem.filename }}</div>
