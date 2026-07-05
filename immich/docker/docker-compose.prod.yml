@@ -172,6 +172,19 @@ services:
       - "8765:8765"
 
   # ------------------------------------------------------------------------
+  face-indexer:
+    build: ../face-indexer
+    container_name: immich_face_indexer
+    restart: unless-stopped
+    environment:
+      IMMICH_URL: ${FACE_INDEXER_IMMICH_URL:-http://immich-server:2283}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      LOG_LEVEL: ${FACE_INDEXER_LOG_LEVEL:-INFO}
+    volumes:
+      - ../face-indexer/.env.json:/app/.env.json:ro
+      - ../face-indexer/logs:/app/logs
+
+  # ------------------------------------------------------------------------
   frpc:
     image: snowdreamtech/frpc
     container_name: immich_frpc
