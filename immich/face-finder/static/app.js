@@ -730,7 +730,7 @@ const FfPersonModal = defineComponent({
                         </div>
                         <div class="ff-file-thumbs">
                             <img v-for="s in f.segments" :key="s.segment_id ?? ('ft'+s.face_track_id)"
-                                 :src="s.thumb_url"
+                                 v-lazy-src="s.thumb_url"
                                  :title="((s.quality||0)*100).toFixed(0) + '%'"
                                  style="cursor:zoom-in"
                                  @mouseenter="openPhotoTooltip($event, photoItem(s, f))"
@@ -990,7 +990,7 @@ const FfPersonsView = defineComponent({
                             <div class="ff-file-name" :title="f.filename">{{ f.filename }}</div>
                             <div class="ff-file-thumbs">
                                 <img v-for="t in f.tracks" :key="t.track_id"
-                                     :src="t.thumb_url"
+                                     v-lazy-src="t.thumb_url"
                                      :title="'quality: ' + (t.best_quality * 100).toFixed(0) + '%'"
                                      :onerror="'this.src=\\''+BLANK+'\\''">
                             </div>
@@ -1150,7 +1150,7 @@ const VideoFilesView = defineComponent({
                         <div v-for="p in f.persons" :key="p.local_person_id" class="vf-person">
                             <div class="vf-person-thumbs">
                                 <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
-                                    <img :src="s.thumb_url"
+                                    <img v-lazy-src="s.thumb_url"
                                          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
                                          :title="(s.quality*100).toFixed(0)+'%'"
                                          @mouseenter="openPhotoTooltip($event, {thumb_url: s.thumb_url, filename: f.filename, frame_index: s.frame_index, total_frames: f.total_frames, fps: f.fps, start_time: f.start_time})"
@@ -1293,4 +1293,36 @@ const App = defineComponent({
     `,
 });
 
-createApp(App).use(router).mount('#app');
+// ---------------------------------------------------------------------------
+// v-lazy-src directive — custom IntersectionObserver lazy loading
+// Loads image src only when element enters viewport (+ 200px margin)
+// Faster than native loading="lazy" on sudden scroll jumps
+// ---------------------------------------------------------------------------
+const _lazyObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const el = entry.target;
+        const src = el.dataset.lazySrc;
+        if (src) el.src = src;
+        _lazyObserver.unobserve(el);
+    });
+}, { rootMargin: '200px' });
+
+const vLazySrc = {
+    mounted(el, binding) {
+        el.dataset.lazySrc = binding.value || '';
+        _lazyObserver.observe(el);
+    },
+    updated(el, binding) {
+        if (binding.value !== binding.oldValue) {
+            el.dataset.lazySrc = binding.value || '';
+            el.src = '';
+            _lazyObserver.observe(el);
+        }
+    },
+    unmounted(el) {
+        _lazyObserver.unobserve(el);
+    },
+};
+
+createApp(App).directive('lazy-src', vLazySrc).use(router).mount('#app');
