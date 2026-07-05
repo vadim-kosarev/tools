@@ -731,7 +731,6 @@ const FfPersonModal = defineComponent({
                         <div class="ff-file-thumbs">
                             <img v-for="s in f.segments" :key="s.segment_id ?? ('ft'+s.face_track_id)"
                                  :src="s.thumb_url"
-                                 loading="lazy"
                                  :title="((s.quality||0)*100).toFixed(0) + '%'"
                                  style="cursor:zoom-in"
                                  @mouseenter="openPhotoTooltip($event, photoItem(s, f))"
@@ -992,7 +991,6 @@ const FfPersonsView = defineComponent({
                             <div class="ff-file-thumbs">
                                 <img v-for="t in f.tracks" :key="t.track_id"
                                      :src="t.thumb_url"
-                                     loading="lazy"
                                      :title="'quality: ' + (t.best_quality * 100).toFixed(0) + '%'"
                                      :onerror="'this.src=\\''+BLANK+'\\''">
                             </div>
@@ -1153,7 +1151,6 @@ const VideoFilesView = defineComponent({
                             <div class="vf-person-thumbs">
                                 <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
                                     <img :src="s.thumb_url"
-                                         loading="lazy"
                                          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect fill=%22%231e293b%22 width=%2264%22 height=%2264%22/><text x=%2232%22 y=%2242%22 text-anchor=%22middle%22 fill=%22%23475569%22 font-size=%2228%22>&#128100;</text></svg>'"
                                          :title="(s.quality*100).toFixed(0)+'%'"
                                          @mouseenter="openPhotoTooltip($event, {thumb_url: s.thumb_url, filename: f.filename, frame_index: s.frame_index, total_frames: f.total_frames, fps: f.fps, start_time: f.start_time})"

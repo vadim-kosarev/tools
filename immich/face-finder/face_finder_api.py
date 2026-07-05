@@ -31,11 +31,14 @@ else:
 
 # ---------------------------------------------------------------------------
 import io
-from typing import Optional
+from contextlib import contextmanager
+from functools import lru_cache
+from typing import Generator, Optional
 
 import httpx
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
@@ -69,13 +72,37 @@ IMMICH_API_KEY = os.getenv("IMMICH_API_KEY", "")
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
+_db_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=4, maxconn=20,
+            host=IMMICH_DB_HOST, port=IMMICH_DB_PORT,
+            dbname=IMMICH_DB_NAME, user=IMMICH_DB_USER,
+            password=IMMICH_DB_PASSWORD,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+    return _db_pool
+
+
 def _get_conn() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=IMMICH_DB_HOST, port=IMMICH_DB_PORT,
-        dbname=IMMICH_DB_NAME, user=IMMICH_DB_USER,
-        password=IMMICH_DB_PASSWORD,
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
+    return _get_pool().getconn()
+
+
+def _put_conn(conn: psycopg2.extensions.connection) -> None:
+    _get_pool().putconn(conn)
+
+
+@contextmanager
+def _pooled_conn() -> Generator[psycopg2.extensions.connection, None, None]:
+    conn = _get_pool().getconn()
+    try:
+        yield conn
+    finally:
+        _get_pool().putconn(conn)
 
 
 def _init_schema() -> None:
@@ -849,32 +876,41 @@ async def ff_person_detail(person_id: int) -> JSONResponse:
     return JSONResponse(person)
 
 
-@app.get("/api/ff/face-tracks/{track_id}/thumbnail")
-async def ff_face_track_thumbnail(track_id: int) -> Response:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT best_face_jpeg FROM face_finder.face_tracks WHERE id = %s",
-        (track_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
-    if not row or not row["best_face_jpeg"]:
-        raise HTTPException(404, "No thumbnail for this track")
-    return Response(content=bytes(row["best_face_jpeg"]), media_type="image/jpeg")
+_THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=86400, immutable"}
 
+
+@lru_cache(maxsize=2000)
+def _cached_track_jpeg(track_id: int) -> Optional[bytes]:
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT best_face_jpeg FROM face_finder.face_tracks WHERE id = %s", (track_id,))
+        row = cur.fetchone()
+    return bytes(row["best_face_jpeg"]) if row and row["best_face_jpeg"] else None
+
+
+@lru_cache(maxsize=5000)
+def _cached_segment_jpeg(segment_id: int) -> Optional[bytes]:
+    with _pooled_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT jpeg FROM face_finder.face_track_segments WHERE id = %s", (segment_id,))
+        row = cur.fetchone()
+    return bytes(row["jpeg"]) if row and row["jpeg"] else None
+
+
+@app.get("/api/ff/face-tracks/{track_id}/thumbnail")
+def ff_face_track_thumbnail(track_id: int) -> Response:
+    data = _cached_track_jpeg(track_id)
+    if not data:
+        raise HTTPException(404, "No thumbnail for this track")
+    return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
 @app.get("/api/ff/face-track-segments/{segment_id}/thumbnail")
-async def ff_face_track_segment_thumbnail(segment_id: int) -> Response:
-    conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT jpeg FROM face_finder.face_track_segments WHERE id = %s", (segment_id,))
-    row = cur.fetchone()
-    conn.close()
-    if not row or not row["jpeg"]:
+def ff_face_track_segment_thumbnail(segment_id: int) -> Response:
+    data = _cached_segment_jpeg(segment_id)
+    if not data:
         raise HTTPException(404, "No thumbnail for this segment")
-    return Response(content=bytes(row["jpeg"]), media_type="image/jpeg")
+    return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
