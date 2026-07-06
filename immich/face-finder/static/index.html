@@ -742,7 +742,16 @@ body {
 .ffp-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .ffp-avatar { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; border: 2px solid var(--border); flex-shrink: 0; }
 .ffp-info { flex: 1; min-width: 0; }
+.ffp-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 2px; }
 .ffp-name { font-size: 18px; font-weight: 700; }
+.ffp-name-editable { cursor: pointer; border-bottom: 1px dashed transparent; transition: border-color 0.15s; }
+.ffp-name-editable:hover { border-bottom-color: var(--accent); color: var(--accent); }
+.ffp-name-input {
+  font-size: 18px; font-weight: 700;
+  background: var(--bg-input); border: 1px solid var(--accent);
+  border-radius: 6px; color: var(--text);
+  padding: 2px 8px; outline: none; min-width: 180px;
+}
 .ffp-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .ffp-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
 .ffp-close:hover { color: var(--text); background: var(--bg-hover); }

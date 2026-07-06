@@ -915,6 +915,28 @@ def ff_face_track_segment_thumbnail(segment_id: int) -> Response:
     return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
+class PatchPersonRequest(BaseModel):
+    name: str
+
+
+@app.patch("/api/ff/persons/{person_id}")
+async def ff_patch_person(person_id: int, req: PatchPersonRequest) -> JSONResponse:
+    name = req.name.strip() or None
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE face_finder.local_persons SET immich_person_name = %s WHERE id = %s RETURNING id",
+        (name, person_id),
+    )
+    if not cur.fetchone():
+        conn.close()
+        raise HTTPException(404, "Person not found")
+    conn.commit()
+    conn.close()
+    logger.info("Renamed local_person id=%s → %s", person_id, name)
+    return JSONResponse({"id": person_id, "name": name})
+
+
 @app.delete("/api/ff/video-files/{video_id}")
 async def ff_delete_video_file(video_id: int) -> JSONResponse:
     conn = _get_conn()

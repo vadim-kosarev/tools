@@ -23,6 +23,7 @@ const api = {
     get: (url) => api.request('GET', url),
     post: (url, body) => api.request('POST', url, body),
     put: (url, body) => api.request('PUT', url, body),
+    patch: (url, body) => api.request('PATCH', url, body),
 };
 
 // ---------------------------------------------------------------------------
@@ -616,6 +617,18 @@ const MergeLogView = defineComponent({
 });
 
 // ---------------------------------------------------------------------------
+// Person name overrides — updated on rename, propagates everywhere instantly
+// ---------------------------------------------------------------------------
+const personNameOverrides = reactive({});
+
+function personDisplayName(p) {
+    if (!p) return '';
+    const override = personNameOverrides[p.local_person_id ?? p.id];
+    if (override !== undefined) return override || p.label || '';
+    return p.immich_person_name || p.label || '';
+}
+
+// ---------------------------------------------------------------------------
 // FfPersonModal — person detail popup (used from Videos view)
 // ---------------------------------------------------------------------------
 const ffPersonModal = reactive({ show: false, person: null, loading: false, priorityVideoId: null, priorityTrackId: null });
@@ -693,7 +706,36 @@ const FfPersonModal = defineComponent({
             sortedFiles.value.flatMap(f2 => (f2.segments || []).map(s => photoItem(s, f2)))
         );
 
-        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, openPhotoTooltip, closePhotoTooltip, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery };
+        const editingName = ref(false);
+        const nameInput = ref('');
+
+        function startEdit() {
+            nameInput.value = personDisplayName(ffPersonModal.person) ;
+            editingName.value = true;
+            nextTick(() => {
+                const el = document.querySelector('.ffp-name-input');
+                if (el) { el.focus(); el.select(); }
+            });
+        }
+
+        function cancelEdit() { editingName.value = false; }
+
+        async function saveName() {
+            const person = ffPersonModal.person;
+            if (!person) return;
+            const newName = nameInput.value.trim();
+            try {
+                await api.patch(`/api/ff/persons/${person.id}`, { name: newName });
+                personNameOverrides[person.id] = newName;
+                person.immich_person_name = newName || null;
+                editingName.value = false;
+                showToast('Имя сохранено', 'success');
+            } catch (e) {
+                showToast('Ошибка: ' + e.message, 'error');
+            }
+        }
+
+        return { m: ffPersonModal, close, goToPersons, goToFile, openPhoto, openPhotoTooltip, closePhotoTooltip, formatDate, BLANK, sortedFiles, fileRefs, photoItem, photoGallery, editingName, nameInput, startEdit, cancelEdit, saveName, personDisplayName };
     },
     template: `
     <div class="modal-overlay" v-if="m.show" @click.self="close">
@@ -707,7 +749,17 @@ const FfPersonModal = defineComponent({
                          style="cursor:zoom-in"
                          @click="openPhoto(m.person.best_faces[0], m.person.best_faces)">
                     <div class="ffp-info">
-                        <div class="ffp-name">{{ m.person.immich_person_name || m.person.label }}</div>
+                        <div class="ffp-name-row">
+                            <template v-if="!editingName">
+                                <span class="ffp-name ffp-name-editable" @click="startEdit" title="Нажмите для переименования">{{ personDisplayName(m.person) }}</span>
+                            </template>
+                            <template v-else>
+                                <input class="ffp-name-input" v-model="nameInput"
+                                       @keyup.enter="saveName" @keyup.escape="cancelEdit">
+                                <button class="btn btn-primary" style="font-size:12px;padding:4px 10px" @click="saveName">Сохранить</button>
+                                <button class="btn btn-ghost" style="font-size:12px;padding:4px 8px" @click="cancelEdit">Отмена</button>
+                            </template>
+                        </div>
                         <div class="ffp-meta">
                             {{ m.person.track_count }} tracks ·
                             {{ m.person.files.length }} files ·
@@ -1140,7 +1192,7 @@ const VideoFilesView = defineComponent({
             }
         }
 
-        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip, sentinel, letters, activeLetter, selectLetter, deleteFile, personSort, personSortOptions, sortedPersons };
+        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip, sentinel, letters, activeLetter, selectLetter, deleteFile, personSort, personSortOptions, sortedPersons, personDisplayName };
     },
     template: `
     <div class="view">
@@ -1212,7 +1264,7 @@ const VideoFilesView = defineComponent({
                             </div>
                             <div class="vf-person-name"
                                  @click="openFfPerson(p.local_person_id, f.id)">
-                                {{ p.immich_person_name || p.label }}
+                                {{ personDisplayName(p) }}
                             </div>
                         </div>
                     </div>
