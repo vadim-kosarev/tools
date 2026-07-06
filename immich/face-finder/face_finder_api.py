@@ -652,7 +652,7 @@ async def ff_video_files(
                     LEFT JOIN face_finder.face_track_segments fts ON fts.face_track_id = ft2.id
                     WHERE ft2.video_id = vf.id
                     GROUP BY ft2.local_person_id, lp.label, lp.immich_person_name
-                    ORDER BY COALESCE(lp.immich_person_name, lp.label) ASC
+                    ORDER BY COUNT(fts.id) DESC, MAX(COALESCE(fts.quality, ft2.best_quality)) DESC NULLS LAST
                 ) p
             ) AS persons
         FROM face_finder.video_files vf
@@ -913,6 +913,31 @@ def ff_face_track_segment_thumbnail(segment_id: int) -> Response:
     if not data:
         raise HTTPException(404, "No thumbnail for this segment")
     return Response(content=data, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
+
+
+@app.delete("/api/ff/video-files/{video_id}")
+async def ff_delete_video_file(video_id: int) -> JSONResponse:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, filename FROM face_finder.video_files WHERE id = %s", (video_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Video file not found")
+    cur.execute("""
+        DELETE FROM face_finder.detection_facts
+        WHERE face_track_id IN (SELECT id FROM face_finder.face_tracks WHERE video_id = %s)
+    """, (video_id,))
+    cur.execute("""
+        DELETE FROM face_finder.face_track_segments
+        WHERE face_track_id IN (SELECT id FROM face_finder.face_tracks WHERE video_id = %s)
+    """, (video_id,))
+    cur.execute("DELETE FROM face_finder.face_tracks WHERE video_id = %s", (video_id,))
+    cur.execute("DELETE FROM face_finder.video_files WHERE id = %s", (video_id,))
+    conn.commit()
+    conn.close()
+    logger.info("Deleted video file id=%s filename=%s", video_id, row["filename"])
+    return JSONResponse({"deleted": True, "id": video_id, "filename": row["filename"]})
 
 
 # ---------------------------------------------------------------------------

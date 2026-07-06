@@ -772,6 +772,29 @@ body {
 }
 .day-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
 .day-filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.person-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.person-sort-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.person-sort-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.person-sort-btn:hover { border-color: var(--accent); color: var(--accent); }
+.person-sort-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .letter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -891,7 +914,24 @@ body {
   color: var(--text);
   margin-bottom: 4px;
   word-break: break-all;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
+.vf-delete-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.video-file-card:hover .vf-delete-btn { opacity: 1; }
+.vf-delete-btn:hover { color: var(--danger); }
 .vf-meta {
   font-size: 12px;
   color: var(--text-muted);

@@ -1075,6 +1075,32 @@ const VideoFilesView = defineComponent({
             searchTimer = setTimeout(() => load(true), 350);
         }
 
+        const personSort = ref('popularity');
+
+        const personSortOptions = [
+            { value: 'popularity',   label: 'По популярности' },
+            { value: 'first_frame',  label: 'По появлению' },
+            { value: 'name',         label: 'По имени' },
+        ];
+
+        function sortedPersons(persons) {
+            if (!persons || !persons.length) return persons;
+            const arr = [...persons];
+            if (personSort.value === 'first_frame') {
+                arr.sort((a, b) => {
+                    const minFrame = p => Math.min(...(p.segments || []).map(s => s.frame_index ?? Infinity));
+                    return minFrame(a) - minFrame(b);
+                });
+            } else if (personSort.value === 'name') {
+                arr.sort((a, b) => {
+                    const name = p => (p.immich_person_name || p.label || '').toLowerCase();
+                    return name(a).localeCompare(name(b));
+                });
+            }
+            // 'popularity' — уже отсортировано сервером
+            return arr;
+        }
+
         const sentinel = ref(null);
         watch(sentinel, (el, _, onCleanup) => {
             if (!el) return;
@@ -1102,7 +1128,19 @@ const VideoFilesView = defineComponent({
             return `${m}:${s.toString().padStart(2, '0')}`;
         }
 
-        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip, sentinel, letters, activeLetter, selectLetter };
+        async function deleteFile(f) {
+            if (!confirm(`Delete "${f.filename}" from database?\nThis will also remove all face tracks and segments for this file.`)) return;
+            try {
+                await api.request('DELETE', `/api/ff/video-files/${f.id}`);
+                files.value = files.value.filter(x => x.id !== f.id);
+                total.value = Math.max(0, total.value - 1);
+                showToast(`Deleted: ${f.filename}`, 'success');
+            } catch (e) {
+                showToast('Delete failed: ' + e.message, 'error');
+            }
+        }
+
+        return { files, total, loading, hasMore, load, search, sort, sortOptions, onSearch, formatDate, duration, openFfPerson, openPhotoTooltip, closePhotoTooltip, sentinel, letters, activeLetter, selectLetter, deleteFile, personSort, personSortOptions, sortedPersons };
     },
     template: `
     <div class="view">
@@ -1120,6 +1158,13 @@ const VideoFilesView = defineComponent({
             </div>
         </div>
 
+        <div class="person-sort-bar">
+            <span class="person-sort-label">Герои:</span>
+            <button v-for="o in personSortOptions" :key="o.value"
+                    :class="['person-sort-btn', { active: personSort === o.value }]"
+                    @click="personSort = o.value">{{ o.label }}</button>
+        </div>
+
         <div class="letter-bar" v-if="letters.length">
             <button v-for="l in letters" :key="l"
                     :class="['letter-btn', { active: activeLetter === l }]"
@@ -1134,7 +1179,14 @@ const VideoFilesView = defineComponent({
         <div v-else>
             <div class="video-file-list">
                 <div v-for="f in files" :key="f.id" class="video-file-card">
-                    <div class="vf-filename">{{ f.filename }}</div>
+                    <div class="vf-filename">
+                        {{ f.filename }}
+                        <button class="vf-delete-btn" @click.stop="deleteFile(f)" title="Delete from database">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                            </svg>
+                        </button>
+                    </div>
                     <div class="vf-meta">
                         <span>{{ formatDate(f.start_time) }}</span>
                         <span class="sep">·</span>
@@ -1147,7 +1199,7 @@ const VideoFilesView = defineComponent({
                         <span>{{ f.track_count }} tracks</span>
                     </div>
                     <div class="vf-persons" v-if="f.persons && f.persons.length">
-                        <div v-for="p in f.persons" :key="p.local_person_id" class="vf-person">
+                        <div v-for="p in sortedPersons(f.persons)" :key="p.local_person_id" class="vf-person">
                             <div class="vf-person-thumbs">
                                 <div class="vf-thumb-wrap" v-for="s in p.segments" :key="s.segment_id ?? s.face_track_id">
                                     <img v-lazy-src="s.thumb_url"
