@@ -36,6 +36,7 @@ services:
       - yd-photos:/mnt/media/yd-photos/Sorted:ro
       - google-takeout:/mnt/media/google-takeout:ro
       - o-homevideo:/mnt/media/o-homevideo:ro
+      - luigi-temp:/mnt/media/luigi-temp:rw
     env_file:
       - .env
     ports:
@@ -50,8 +51,7 @@ services:
 
   immich-machine-learning:
     container_name: immich_machine_learning
-    image: ghcr.io/immich-app/immich-machine-learning:pr-18272-cuda
-#    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION-cuda:-release-cuda}
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}-cuda
     extends:
        file: hwaccel.ml.yml
        service: cuda # set to one of [armnn, cuda, rocm, openvino, openvino-wsl, rknn] for accelerated inference
@@ -208,6 +208,13 @@ volumes:
   model-cache:
   prometheus-data:
   grafana-data:
+
+  luigi-temp:
+    driver: local
+    driver_opts:
+      o: user=user1,password=user1,iocharset=utf8
+      device: //luigi/TEMP
+      type: cifs
 
   vkshare:
     driver: local
