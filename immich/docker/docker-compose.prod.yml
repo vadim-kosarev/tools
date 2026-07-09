@@ -26,6 +26,11 @@ services:
       - IMMICH_SHARED_FACES=true
       - IMMICH_FACE_RECOGNITION_ENABLED=true
       - IMMICH_MACHINE_LEARNING_ENABLED=true
+      - DB_HOSTNAME=database
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DATABASE_NAME=${DB_DATABASE_NAME}
+      - REDIS_HOSTNAME=redis
     volumes:
       - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload:rw
       - /etc/localtime:/etc/localtime:ro
@@ -37,8 +42,6 @@ services:
       - google-takeout:/mnt/media/google-takeout:ro
       - o-homevideo:/mnt/media/o-homevideo:ro
       - luigi-temp:/mnt/media/luigi-temp:rw
-    env_file:
-      - .env
     ports:
       - 2283:2283
     depends_on:
@@ -59,8 +62,6 @@ services:
       - 3003:3003
     volumes:
       - model-cache:/cache
-    env_file:
-      - .env
     deploy:
       resources:
         reservations:
@@ -87,8 +88,6 @@ services:
   database:
     container_name: immich_postgres
     image: ghcr.io/immich-app/postgres:14-vectorchord0.3.0-pgvectors0.2.0
-    env_file:
-      - .env
     environment:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_USER: ${DB_USERNAME}
