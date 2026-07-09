@@ -10,3 +10,11 @@ services:
     volumes:
       - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload:rw
       - /etc/localtime:/etc/localtime:ro
+
+  # На starlight — только продублированный [immich-server], без frigate/luigi/starlight-vnc и
+  # т.п. (те тянутся через frpc на brightsky). frps не даёт зарегистрировать дубль имени прокси —
+  # держит регистрацию тот, кто жив; когда brightsky отваливается, frpc здесь (в retry-цикле)
+  # тут же её подхватывает.
+  frpc:
+    volumes:
+      - ./frpc.starlight.ini:/etc/frp/frpc.ini
