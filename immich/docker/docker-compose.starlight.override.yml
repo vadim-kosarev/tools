@@ -1,0 +1,12 @@
+# Оверрайд только для starlight (резервный/тестовый хост).
+# Исключает монтирование внешних библиотек с luigi (vkshare/o-homevideo/o-photos/yd-photos/
+# google-takeout) — они недоступны, если luigi сейчас не в сети, и не нужны для базовой
+# проверки работоспособности Immich. docker-compose.prod.yml (используется на brightsky) не
+# меняется, применяется только вместе с ним:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.starlight.override.yml --env-file .env.starlight up -d immich-server
+
+services:
+  immich-server:
+    volumes:
+      - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload:rw
+      - /etc/localtime:/etc/localtime:ro
