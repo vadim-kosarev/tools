@@ -24,6 +24,16 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+## Failover (если упал brightsky)
+
+Если `https://vkosarev.name:7601` отдаёт `502` из-за падения brightsky — на **starlight**
+запустить:
+```powershell
+cd C:\dev\github.com\vadim-kosarev\tools\immich\docker
+.\failover-to-starlight.ps1
+```
+Дальше — читать инструкцию и чек-лист тут: [`immich/.ai/20260708.003_ha_failover_plan.md`](.ai/20260708.003_ha_failover_plan.md).
+
 ## Backup
 
 ### Database (PostgreSQL)
