@@ -99,8 +99,7 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: 
-            rtsp://admin:noname564@192.168.2.14:554/stream1
+        - path: rtsp://admin:noname564@192.168.2.14:554/stream1
           roles:
             - detect
             - record
@@ -124,9 +123,6 @@ cameras:
     review: {}
     record:
       enabled: true
-      retain:
-        days: 14
-        mode: motion
       alerts:
         retain:
           days: 180
@@ -137,6 +133,10 @@ cameras:
           mode: motion
 
 
+      continuous:
+        days: 0
+      motion:
+        days: 14
   cam1:
     enabled: true
     ffmpeg:
@@ -166,9 +166,6 @@ cameras:
     review: {}
     record:
       enabled: true
-      retain:
-        days: 14
-        mode: motion
       alerts:
         retain:
           days: 180
@@ -179,6 +176,10 @@ cameras:
           mode: motion
 
 
+      continuous:
+        days: 0
+      motion:
+        days: 14
 tls:
   enabled: false
 
@@ -226,9 +227,6 @@ review:
 
 record:
   enabled: true
-  retain:
-    days: 30
-    mode: motion
   alerts:
     retain:
       days: 30
@@ -238,11 +236,15 @@ record:
       days: 30
       mode: motion
 
-version: 0.16-0
+  continuous:
+    days: 0
+  motion:
+    days: 30
+version: 0.17-0
 semantic_search:
   enabled: true
   model_size: large
-  model: "jinav2"
+  model: jinav2
   #reindex: true
 face_recognition:
   enabled: true
