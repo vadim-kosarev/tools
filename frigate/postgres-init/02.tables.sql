@@ -13,17 +13,6 @@
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
 
--- Dumping structure for table public.data_anpr
-CREATE TABLE IF NOT EXISTS "data_anpr" (
-	"event_id" BIGINT NOT NULL,
-	"status" VARCHAR(16) NULL DEFAULT 'PENDING',
-	"result" JSONB NULL DEFAULT NULL,
-	PRIMARY KEY ("event_id"),
-	CONSTRAINT "id_fk" FOREIGN KEY ("event_id") REFERENCES "data_events" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION
-);
-
--- Data exporting was unselected.
-
 -- Dumping structure for table public.data_events
 CREATE TABLE IF NOT EXISTS "data_events" (
 	"id" SERIAL NOT NULL,
@@ -31,9 +20,20 @@ CREATE TABLE IF NOT EXISTS "data_events" (
 	"data" JSONB NULL DEFAULT NULL,
 	"data_hash" TEXT NULL DEFAULT NULL,
 	"source" VARCHAR NULL DEFAULT NULL,
-	PRIMARY KEY ("id"),
-	INDEX "idx_events_source" ("source"),
-	UNIQUE INDEX "uq_data_events_data_hash" ("data_hash")
+	PRIMARY KEY ("id")
+);
+CREATE INDEX IF NOT EXISTS "idx_events_source" ON "data_events" ("source");
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_data_events_data_hash" ON "data_events" ("data_hash");
+
+-- Data exporting was unselected.
+
+-- Dumping structure for table public.data_anpr
+CREATE TABLE IF NOT EXISTS "data_anpr" (
+	"event_id" BIGINT NOT NULL,
+	"status" VARCHAR(16) NULL DEFAULT 'PENDING',
+	"result" JSONB NULL DEFAULT NULL,
+	PRIMARY KEY ("event_id"),
+	CONSTRAINT "id_fk" FOREIGN KEY ("event_id") REFERENCES "data_events" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION
 );
 
 -- Data exporting was unselected.
@@ -54,14 +54,14 @@ CREATE TABLE "view_events_media" (
 	"PLATE_NO_DET" TEXT NULL,
 	"MESSAGE" TEXT NULL,
 	"status" VARCHAR(16) NULL
-) ENGINE=MyISAM;
+);
 
 -- Dumping structure for view public.view_plate_numbers
 -- Creating temporary table to overcome VIEW dependency errors
 CREATE TABLE "view_plate_numbers" (
 	"plate_digits" TEXT NULL,
 	"groups_count" BIGINT NULL
-) ENGINE=MyISAM;
+);
 
 -- Removing temporary table and create final VIEW structure
 DROP TABLE IF EXISTS "view_events_media";
