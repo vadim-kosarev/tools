@@ -23,10 +23,12 @@ docker compose up -d
 
 ### PostgreSQL (события, метаданные)
 
-Настроен автоматический pg_dump через контейнер `postgres-backup` (образ `prodrigestivill/postgres-backup-local:16`):
-- Расписание: ежедневно (`@daily`)
-- Хранение: 7 дней / 4 недели / 6 месяцев
-- Дампы пишутся в `K:\frigate\backups\postgres`
+Настроен автоматический бэкап через контейнер `postgres-backup` (образ `postgres:18`,
+скрипт `postgres-backup/backup.sh`):
+- `pg_dumpall` стримится напрямую в `gzip -9` (без промежуточного `.sql` на диске)
+- Расписание: раз в сутки (`while true; do sh /backup.sh; sleep 86400; done`)
+- Хранение: 7 дней (`KEEP_DAYS`), старые архивы удаляются автоматически
+- Архивы `frigate-YYYYMMDD.sql.gz` пишутся в `K:\frigate\backups\postgres`
 
 Запуск: `docker compose up -d postgres-backup`
 
