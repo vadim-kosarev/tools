@@ -1,2 +1,3 @@
 immich/face-indexer/entrypoint.sh text eol=lf
 immich/face-indexer/crontab text eol=lf
+frigate/postgres-backup/backup.sh text eol=lf
