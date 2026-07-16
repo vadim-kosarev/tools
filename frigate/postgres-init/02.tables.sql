@@ -18,8 +18,9 @@ CREATE TABLE IF NOT EXISTS "data_events" (
 	"id" SERIAL NOT NULL,
 	"created_at" TIMESTAMPTZ NULL DEFAULT now(),
 	"data" JSONB NULL DEFAULT NULL,
-	"data_hash" TEXT NULL DEFAULT NULL,
 	"source" VARCHAR NULL DEFAULT NULL,
+	"frigate_id" VARCHAR NULL DEFAULT NULL,
+	"data_hash" TEXT NULL DEFAULT NULL,
 	PRIMARY KEY ("id")
 );
 CREATE INDEX IF NOT EXISTS "idx_events_source" ON "data_events" ("source");
