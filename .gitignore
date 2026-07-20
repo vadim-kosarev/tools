@@ -50,4 +50,6 @@ frigate/backup/**
 frigate/logs/**
 frigate/tmp/**
 frigate/mosquitto/data/**
+frigate/metabase-data/**
+.playwright-mcp/**
 py
