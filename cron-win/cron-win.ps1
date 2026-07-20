@@ -470,7 +470,7 @@ function Sync-Tasks {
             # action is already built above
 
             $settings = New-ScheduledTaskSettingsSet `
-                -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+                -ExecutionTimeLimit (New-TimeSpan -Hours 5) `
                 -MultipleInstances  IgnoreNew `
                 -StartWhenAvailable
 
