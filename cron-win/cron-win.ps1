@@ -209,14 +209,16 @@ function Get-ScriptNameFromCommand {
         return [System.IO.Path]::GetFileName($Matches[1])
     }
 
-    # Full path to an interpreter/exe as first token (e.g. python.exe, node.exe):
-    # prefer the script argument that follows it, so multiple scripts run through
-    # the same interpreter don't collide on the interpreter's own filename.
+    # Path (absolute or relative, e.g. ..\.venv\Scripts\python.exe) to an interpreter/exe
+    # as first token: prefer the script argument that follows it, so multiple scripts run
+    # through the same interpreter don't collide on the interpreter's own filename, and so
+    # relative "..\" segments never end up baked into the task name (Task Scheduler rejects
+    # task names containing "..").
     $rest = $null
-    if ($Command -match '^"([A-Za-z]:[^"]+)"\s*(.*)$') {
+    if ($Command -match '^"([^"]+)"\s*(.*)$') {
         $exeName = [System.IO.Path]::GetFileName($Matches[1])
         $rest    = $Matches[2]
-    } elseif ($Command -match '^([A-Za-z]:\S+)\s*(.*)$') {
+    } elseif ($Command -match '^(\S+)\s*(.*)$') {
         $exeName = [System.IO.Path]::GetFileName($Matches[1])
         $rest    = $Matches[2]
     }
@@ -246,6 +248,8 @@ function Get-TaskName {
     $sanitizedPath   = $DirectoryPath -replace '[:\\]', '_' -replace '^_+', ''
     $sanitizedScript = $ScriptName    -replace '[\\/:*?"<>|]', '_'
     $name = "${sanitizedPath}_${sanitizedScript}"
+    # Task Scheduler rejects task names containing ".." - collapse any leftover run of dots
+    $name = $name -replace '\.{2,}', '_'
     # Windows Task Scheduler task name limit is around 230 characters
     if ($name.Length -gt 230) { $name = $name.Substring(0, 230) }
     return $name
@@ -285,7 +289,7 @@ function Parse-CrontabFile {
     }
 
     $lineNum = 0
-    $cronFieldRx = '^(\*|\d+(-\d+)?)(\\/\d+)?(,(\*|\d+(-\d+)?)(\\/\d+)?)*$'
+    $cronFieldRx = '^(\*|\d+(-\d+)?)(/\d+)?(,(\*|\d+(-\d+)?)(/\d+)?)*$'
 
     foreach ($rawLine in $lines) {
         $lineNum++

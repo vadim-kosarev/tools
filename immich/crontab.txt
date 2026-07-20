@@ -1,2 +1,2 @@
 0 4 * * 0 powershell -ExecutionPolicy Bypass -File .\backup-db.ps1
-0 */4 * * * "C:\Program Files\Python312\python.exe" scripts\tag_frequent_faces.py tag
+0 */4 * * * ..\.venv\Scripts\python.exe scripts\tag_frequent_faces.py tag
