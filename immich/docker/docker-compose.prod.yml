@@ -73,10 +73,9 @@ services:
     healthcheck:
       disable: false
     environment:
-    - EXECUTION_PROVIDERS=tensorrt,cuda
+    - EXECUTION_PROVIDERS=cuda
     - ENABLE_GPU=true
     - DEVICE=cuda
-    - ORT_TENSORRT_FP16_ENABLE=1
 
   redis:
     container_name: immich_redis
