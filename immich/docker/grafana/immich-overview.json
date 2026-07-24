@@ -7,8 +7,8 @@
     "timezone": "browser",
     "schemaVersion": 39,
     "version": 0,
-    "refresh": "30s",
-    "time": { "from": "now-6h", "to": "now" },
+    "refresh": "5m",
+    "time": { "from": "now-2y", "to": "now" },
     "panels": [
       {
         "id": 1,
@@ -105,6 +105,157 @@
         "targets": [
           { "expr": "rate({__name__=~\"immich_jobs_.*_success_total\"}[5m])", "legendFormat": "{{__name__}}", "refId": "A" },
           { "expr": "rate({__name__=~\"immich_jobs_.*_failed_total\"}[5m])", "legendFormat": "{{__name__}}", "refId": "B" }
+        ]
+      },
+      {
+        "id": 20,
+        "type": "row",
+        "title": "Library",
+        "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 21,
+        "type": "stat",
+        "title": "Total assets",
+        "gridPos": { "h": 4, "w": 4, "x": 0, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT count(*) FROM asset WHERE \"deletedAt\" IS NULL", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] }
+      },
+      {
+        "id": 22,
+        "type": "stat",
+        "title": "Photos",
+        "gridPos": { "h": 4, "w": 4, "x": 4, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT count(*) FROM asset WHERE \"deletedAt\" IS NULL AND type='IMAGE'", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] }
+      },
+      {
+        "id": 23,
+        "type": "stat",
+        "title": "Videos",
+        "gridPos": { "h": 4, "w": 4, "x": 8, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT count(*) FROM asset WHERE \"deletedAt\" IS NULL AND type='VIDEO'", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] }
+      },
+      {
+        "id": 24,
+        "type": "stat",
+        "title": "People",
+        "gridPos": { "h": 4, "w": 4, "x": 12, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT count(*) FROM person", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] }
+      },
+      {
+        "id": 25,
+        "type": "stat",
+        "title": "Faces detected",
+        "gridPos": { "h": 4, "w": 4, "x": 16, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT count(*) FROM asset_face", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] }
+      },
+      {
+        "id": 26,
+        "type": "stat",
+        "title": "Storage used",
+        "gridPos": { "h": 4, "w": 4, "x": 20, "y": 21 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "targets": [
+          { "format": "table", "rawSql": "SELECT sum(\"fileSizeInByte\") FROM asset_exif", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "bytes" }, "overrides": [] }
+      },
+      {
+        "id": 27,
+        "type": "timeseries",
+        "title": "Asset library growth (cumulative)",
+        "gridPos": { "h": 9, "w": 24, "x": 0, "y": 25 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "targets": [
+          {
+            "format": "time_series",
+            "refId": "A",
+            "rawSql": "SELECT day::timestamp AS time, SUM(cnt) OVER (ORDER BY day) AS assets FROM (SELECT date_trunc('day', \"createdAt\") AS day, count(*) AS cnt FROM asset WHERE \"deletedAt\" IS NULL GROUP BY 1) sub ORDER BY day"
+          }
+        ]
+      },
+      {
+        "id": 28,
+        "type": "timeseries",
+        "title": "People growth (cumulative)",
+        "gridPos": { "h": 9, "w": 12, "x": 0, "y": 34 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "targets": [
+          {
+            "format": "time_series",
+            "refId": "A",
+            "rawSql": "SELECT day::timestamp AS time, SUM(cnt) OVER (ORDER BY day) AS people FROM (SELECT date_trunc('day', \"createdAt\") AS day, count(*) AS cnt FROM person GROUP BY 1) sub ORDER BY day"
+          }
+        ]
+      },
+      {
+        "id": 29,
+        "type": "timeseries",
+        "title": "Storage growth (cumulative)",
+        "gridPos": { "h": 9, "w": 12, "x": 12, "y": 34 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+        "targets": [
+          {
+            "format": "time_series",
+            "refId": "A",
+            "rawSql": "SELECT day::timestamp AS time, SUM(bytes) OVER (ORDER BY day) AS storage_bytes FROM (SELECT date_trunc('day', a.\"createdAt\") AS day, SUM(e.\"fileSizeInByte\") AS bytes FROM asset a JOIN asset_exif e ON e.\"assetId\" = a.id WHERE a.\"deletedAt\" IS NULL GROUP BY 1) sub ORDER BY day"
+          }
+        ]
+      },
+      {
+        "id": 30,
+        "type": "barchart",
+        "title": "Top camera models",
+        "gridPos": { "h": 9, "w": 12, "x": 0, "y": 43 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "options": { "xTickLabelRotation": -45 },
+        "targets": [
+          {
+            "format": "table",
+            "refId": "A",
+            "rawSql": "SELECT make || ' ' || model AS camera, count(*) AS assets FROM asset_exif WHERE make IS NOT NULL AND make != '' GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+          }
+        ]
+      },
+      {
+        "id": 31,
+        "type": "barchart",
+        "title": "Top countries",
+        "gridPos": { "h": 9, "w": 12, "x": 12, "y": 43 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "dft371muh1m9sd" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "options": { "xTickLabelRotation": -45 },
+        "targets": [
+          {
+            "format": "table",
+            "refId": "A",
+            "rawSql": "SELECT country, count(*) AS assets FROM asset_exif WHERE country IS NOT NULL AND country != '' GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+          }
         ]
       }
     ]
