@@ -31,6 +31,10 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_DATABASE_NAME=${DB_DATABASE_NAME}
       - REDIS_HOSTNAME=redis
+      # Prometheus metrics (/metrics on 8081 = api, 8082 = microservices) --
+      # only immich-server uses this var, machine-learning doesn't (see
+      # https://docs.immich.app/features/monitoring/).
+      - IMMICH_TELEMETRY_INCLUDE=${IMMICH_TELEMETRY_INCLUDE:-}
     volumes:
       - ${UPLOAD_LOCATION}/photos:/usr/src/app/upload:rw
       - /etc/localtime:/etc/localtime:ro
@@ -44,6 +48,8 @@ services:
       - luigi-temp:/mnt/media/luigi-temp:rw
     ports:
       - 2283:2283
+      - 8081:8081
+      - 8082:8082
     depends_on:
       - redis
       - database

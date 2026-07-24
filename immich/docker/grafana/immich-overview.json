@@ -1,0 +1,114 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "immich-overview",
+    "title": "Immich Overview",
+    "tags": ["immich"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 0,
+    "refresh": "30s",
+    "time": { "from": "now-6h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Users",
+        "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "targets": [
+          { "expr": "immich_users_total", "legendFormat": "users", "refId": "A" }
+        ],
+        "fieldConfig": { "defaults": { "color": { "mode": "thresholds" } }, "overrides": [] }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "API up",
+        "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "targets": [
+          { "expr": "up{job=\"immich_api\"}", "legendFormat": "immich_api", "refId": "A" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+            ],
+            "color": { "mode": "thresholds" },
+            "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Microservices up",
+        "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "targets": [
+          { "expr": "up{job=\"immich_microservices\"}", "legendFormat": "immich_microservices", "refId": "A" }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+            ],
+            "color": { "mode": "thresholds" },
+            "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 4,
+        "type": "timeseries",
+        "title": "CPU utilization",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+        "targets": [
+          { "expr": "system_cpu_utilization{job=~\"immich_.*\"}", "legendFormat": "{{job}} system", "refId": "A" },
+          { "expr": "process_cpu_utilization{job=~\"immich_.*\"}", "legendFormat": "{{job}} process", "refId": "B" }
+        ]
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "Memory usage (process)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+        "targets": [
+          { "expr": "process_memory_usage{job=~\"immich_.*\"}", "legendFormat": "{{job}}", "refId": "A" }
+        ]
+      },
+      {
+        "id": 6,
+        "type": "timeseries",
+        "title": "Active jobs by queue",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "targets": [
+          { "expr": "{__name__=~\"immich_queues_.*_active\"}", "legendFormat": "{{__name__}}", "refId": "A" }
+        ]
+      },
+      {
+        "id": 7,
+        "type": "timeseries",
+        "title": "Job success/failure rate (5m)",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+        "datasource": { "type": "prometheus", "uid": "aei9ecrbja3nke" },
+        "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+        "targets": [
+          { "expr": "rate({__name__=~\"immich_jobs_.*_success_total\"}[5m])", "legendFormat": "{{__name__}}", "refId": "A" },
+          { "expr": "rate({__name__=~\"immich_jobs_.*_failed_total\"}[5m])", "legendFormat": "{{__name__}}", "refId": "B" }
+        ]
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}
