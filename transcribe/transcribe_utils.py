@@ -96,7 +96,8 @@ def get_audio_duration_from_ffmpeg(input_path: Path) -> float:
     logger.debug(f"Получение длительности: {input_path.name}")
 
     duration_cmd = ["ffmpeg", "-i", str(input_path), "-f", "null", "-"]
-    logger.debug(f"Команда: {' '.join(f'\"{x}\"' for x in duration_cmd)}")
+    cmd_str = ' '.join(f'"{x}"' for x in duration_cmd)
+    logger.debug(f"Команда: {cmd_str}")
 
     result = subprocess.run(
         duration_cmd,
@@ -150,7 +151,8 @@ def extract_audio_from_video(video_path: Path, output_dir: Path) -> Path:
         str(audio_path)
     ]
 
-    logger.info(f"Команда: {' '.join(f'\"{x}\"' for x in cmd)}")
+    cmd_str = ' '.join(f'"{x}"' for x in cmd)
+    logger.info(f"Команда: {cmd_str}")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -196,7 +198,8 @@ def convert_audio_to_wav(audio_path: Path, output_dir: Path) -> Path:
         str(wav_path)
     ]
 
-    logger.info(f"Команда: {' '.join(f'\"{x}\"' for x in cmd)}")
+    cmd_str = ' '.join(f'"{x}"' for x in cmd)
+    logger.info(f"Команда: {cmd_str}")
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -244,7 +247,8 @@ def extract_audio_chunk_with_ffmpeg(
         str(output_path)
     ]
 
-    logger.debug(f"Команда извлечения чанка: {' '.join(f'\"{x}\"' for x in cmd)}")
+    cmd_str = ' '.join(f'"{x}"' for x in cmd)
+    logger.debug(f"Команда извлечения чанка: {cmd_str}")
     subprocess.run(cmd, check=True, capture_output=True)
 
 
