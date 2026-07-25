@@ -154,6 +154,7 @@ services:
       - postgres
     environment:
       JAVA_OPTS: "-Duser.timezone=Europe/Moscow"
+      MB_METABOT_ENABLED: "false"
       MB_CUSTOM_CSS: |
         .table-image img {
           width: 250px !important;
