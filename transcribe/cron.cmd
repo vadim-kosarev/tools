@@ -1,3 +1,5 @@
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
 call ..\.venv\Scripts\activate.bat
 @echo on
 

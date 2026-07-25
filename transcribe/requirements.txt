@@ -1,8 +1,9 @@
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch==2.6.0+cu118
 torchaudio==2.6.0+cu118
-transformers
+transformers==4.57.1
 pyannote.audio
 omegaconf
 python-dotenv
 pydantic
+hydra-core
