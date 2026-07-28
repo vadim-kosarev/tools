@@ -199,8 +199,7 @@ def _search_immich(embedding: list[float], top_k: int, accounts: list[Account]) 
         FROM face_search fs
         JOIN asset_face af ON af.id = fs."faceId"
         JOIN person p ON p.id = af."personId"
-        WHERE p.name IS NOT NULL AND p.name != ''
-          AND p."ownerId" = ANY(%s::uuid[])
+        WHERE p."ownerId" = ANY(%s::uuid[])
         GROUP BY p.id, p.name, p."ownerId"
         ORDER BY distance ASC
         LIMIT %s
@@ -210,7 +209,7 @@ def _search_immich(embedding: list[float], top_k: int, accounts: list[Account]) 
         owner_id = str(row[2])
         results.append({
             "person_id": str(row[0]),
-            "name": row[1],
+            "name": row[1] or "Без имени",
             "owner_id": owner_id,
             "account": account_by_owner.get(owner_id, "?"),
             "distance": round(float(row[3]), 4),
@@ -323,6 +322,7 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; font-size: 24px; }
 }
 .card .info { padding: 12px; }
 .card .name { font-size: 16px; font-weight: 600; color: #e94560; }
+.card .name.unnamed { color: #888; font-style: italic; font-weight: 400; }
 .card .dist { font-size: 13px; color: #888; margin-top: 4px; }
 .card .faces { font-size: 12px; color: #555; }
 .bar { height: 4px; background: #0f3460; border-radius: 2px; margin-top: 6px; }
@@ -456,13 +456,14 @@ function handleImage(file) {
 function renderCard(r) {
     const pct = Math.max(0, Math.min(100, (1 - r.distance) * 100));
     const cls = r.distance < 0.4 ? 'good' : r.distance < 0.6 ? 'ok' : 'weak';
+    const unnamed = r.name === 'Без имени';
     return `
     <div class="card">
         <a href="${immichBase}/people/${r.person_id}" target="_blank">
             <img class="thumb" src="${r.thumb_url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22><rect fill=%22%230f3460%22 width=%22200%22 height=%22200%22/><text x=%22100%22 y=%22110%22 text-anchor=%22middle%22 fill=%22%23888%22 font-size=%2240%22>?</text></svg>'" alt="${r.name}">
             <div class="account-badge">${r.account}</div>
             <div class="info">
-                <div class="name">${r.name}</div>
+                <div class="name${unnamed ? ' unnamed' : ''}">${r.name}</div>
                 <div class="dist">Distance: ${r.distance.toFixed(3)} (${pct.toFixed(0)}% match)</div>
                 <div class="faces">${r.face_count} faces in Immich</div>
                 <div class="bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
