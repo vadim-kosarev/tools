@@ -81,8 +81,9 @@ Sidecar-контейнер для поиска людей по фото лица
 - Результаты >= 50% match показываются сразу, слабые скрыты под выезжающую панель
 - Ссылки на людей ведут в Immich (домен подбирается автоматически по hostname браузера)
 - Использует Immich ML (`/predict`) для извлечения эмбеддингов — не тащит InsightFace/ONNX локально
-- Ищет по pgvector в базе Immich (cosine distance)
-- Проксирует thumbnails через `/api/thumb/{id}` (решает проблему аутентификации)
+- Ищет по pgvector в базе Immich (cosine distance), результаты объединены по всем настроенным аккаунтам и отсортированы вместе
+- Каждая карточка результата помечена бейджем с именем аккаунта-владельца персоны
+- Проксирует thumbnails через `/api/thumb/{owner_id}/{person_id}` (решает проблему аутентификации, ключ выбирается по владельцу)
 - Проброшен наружу через frpc (`8765 → 8765`, nginx на VPS слушает на `8766`)
 
 **Сборка и запуск:**
@@ -92,7 +93,8 @@ docker compose -f docker-compose.prod.yml up -d face-search
 ```
 
 **Env vars** (берутся из общего `.env`, можно переопределить):
-- `IMMICH_API_KEY` — нужен для загрузки thumbnails (создать в Immich UI: User Settings -> API Keys)
+- `FACE_SEARCH_API_KEYS` — API keys аккаунтов через запятую; поиск объединяет библиотеки (person.ownerId) всех перечисленных аккаунтов. Ключи резолвятся в userId через `/api/users/me` лениво, с self-healing retry, если immich-server ещё не поднялся
+- `IMMICH_API_KEY` — fallback, если `FACE_SEARCH_API_KEYS` не задан (один аккаунт; создать в Immich UI: User Settings -> API Keys)
 
 **Важно:** на VPS nginx для `vkosarev.name:8766` нужен `client_max_body_size 10m;` (base64-картинки больше дефолтного 1MB).
 

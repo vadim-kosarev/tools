@@ -169,9 +169,10 @@ services:
       IMMICH_DB_NAME: ${DB_DATABASE_NAME}
       IMMICH_DB_USER: ${DB_USERNAME}
       IMMICH_DB_PASSWORD: ${DB_PASSWORD}
-      IMMICH_URL: http://immich-server:2283
-      IMMICH_ML_URL: http://immich-machine-learning:3003
+      IMMICH_URL: ${FACE_SEARCH_IMMICH_URL:-http://immich-server:2283}
+      IMMICH_ML_URL: ${FACE_SEARCH_ML_URL:-http://immich-machine-learning:3003}
       IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      FACE_SEARCH_API_KEYS: ${FACE_SEARCH_API_KEYS:-}
     ports:
       - "8765:8765"
 

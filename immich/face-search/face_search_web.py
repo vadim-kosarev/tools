@@ -27,6 +27,7 @@ if __name__ == "__main__":
     _args = _parser.parse_args()
 
 # ---------------------------------------------------------------------------
+import asyncio
 import base64
 import json
 
@@ -56,8 +57,24 @@ IMMICH_DB_USER = os.getenv("IMMICH_DB_USER", "postgres")
 IMMICH_DB_PASSWORD = os.getenv("IMMICH_DB_PASSWORD", "postgres")
 IMMICH_URL = os.getenv("IMMICH_URL", "http://immich-server:2283")
 IMMICH_ML_URL = os.getenv("IMMICH_ML_URL", "http://immich-machine-learning:3003")
-IMMICH_API_KEY = os.getenv("IMMICH_API_KEY", "")
 FR_MODEL_NAME = os.getenv("FR_MODEL_NAME", "buffalo_l")
+
+
+def _configured_api_keys() -> list[str]:
+    """API keys of accounts whose libraries are combined in search.
+
+    FACE_SEARCH_API_KEYS — comma-separated list. Falls back to the single
+    IMMICH_API_KEY (used by other sidecars) when not set.
+    """
+    raw = os.getenv("FACE_SEARCH_API_KEYS", "").strip() or os.getenv("IMMICH_API_KEY", "").strip()
+    seen: set[str] = set()
+    keys: list[str] = []
+    for key in raw.split(","):
+        key = key.strip()
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
 
 # ---------------------------------------------------------------------------
 app = FastAPI()
@@ -69,6 +86,48 @@ async def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         _http_client = httpx.AsyncClient(timeout=30.0)
     return _http_client
+
+
+class Account(BaseModel):
+    api_key: str
+    user_id: str
+    name: str
+
+
+_accounts_lock = asyncio.Lock()
+_resolved_accounts: dict[str, Account] = {}
+
+
+async def _resolve_account(api_key: str) -> Account | None:
+    """Resolve an API key to its owning Immich user via /api/users/me."""
+    client = await _get_http_client()
+    try:
+        resp = await client.get(f"{IMMICH_URL}/api/users/me", headers={"x-api-key": api_key})
+    except httpx.HTTPError as e:
+        logger.warning("Account resolve failed for key ...%s: %s", api_key[-4:], e)
+        return None
+    if resp.status_code != 200:
+        logger.warning("Account resolve failed for key ...%s: %s %s", api_key[-4:], resp.status_code, resp.text[:200])
+        return None
+    data = resp.json()
+    name = data.get("name") or data.get("email") or data["id"]
+    return Account(api_key=api_key, user_id=data["id"], name=name)
+
+
+async def _get_accounts() -> list[Account]:
+    """Accounts (libraries) whose faces are combined in search.
+
+    Keys that fail to resolve (e.g. immich-server not ready yet) are retried
+    on the next call rather than cached as permanent failures.
+    """
+    keys = _configured_api_keys()
+    async with _accounts_lock:
+        for key in keys:
+            if key not in _resolved_accounts:
+                account = await _resolve_account(key)
+                if account is not None:
+                    _resolved_accounts[key] = account
+    return [_resolved_accounts[k] for k in keys if k in _resolved_accounts]
 
 
 async def _get_embedding(image_bytes: bytes) -> list[float] | None:
@@ -122,9 +181,11 @@ async def _get_embedding(image_bytes: bytes) -> list[float] | None:
     return None
 
 
-def _search_immich(embedding: list[float], top_k: int = 20) -> list[dict]:
-    """Search Immich pgvector for nearest faces."""
+def _search_immich(embedding: list[float], top_k: int, accounts: list[Account]) -> list[dict]:
+    """Search Immich pgvector for nearest faces across the given accounts' libraries."""
     vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+    owner_ids = [a.user_id for a in accounts]
+    account_by_owner = {a.user_id: a.name for a in accounts}
     conn = psycopg2.connect(
         host=IMMICH_DB_HOST, port=IMMICH_DB_PORT,
         dbname=IMMICH_DB_NAME, user=IMMICH_DB_USER,
@@ -132,25 +193,29 @@ def _search_immich(embedding: list[float], top_k: int = 20) -> list[dict]:
     )
     cur = conn.cursor()
     cur.execute("""
-        SELECT p.id, p.name,
+        SELECT p.id, p.name, p."ownerId",
                min(fs.embedding <=> %s::vector) as distance,
                count(af.id) as face_count
         FROM face_search fs
         JOIN asset_face af ON af.id = fs."faceId"
         JOIN person p ON p.id = af."personId"
         WHERE p.name IS NOT NULL AND p.name != ''
-        GROUP BY p.id, p.name
+          AND p."ownerId" = ANY(%s::uuid[])
+        GROUP BY p.id, p.name, p."ownerId"
         ORDER BY distance ASC
         LIMIT %s
-    """, (vec_str, top_k))
+    """, (vec_str, owner_ids, top_k))
     results = []
     for row in cur.fetchall():
+        owner_id = str(row[2])
         results.append({
             "person_id": str(row[0]),
             "name": row[1],
-            "distance": round(float(row[2]), 4),
-            "face_count": row[3],
-            "thumb_url": f"/api/thumb/{row[0]}",
+            "owner_id": owner_id,
+            "account": account_by_owner.get(owner_id, "?"),
+            "distance": round(float(row[3]), 4),
+            "face_count": row[4],
+            "thumb_url": f"/api/thumb/{owner_id}/{row[0]}",
         })
     conn.close()
     return results
@@ -165,6 +230,10 @@ class SearchRequest(BaseModel):
 
 @app.post("/api/search")
 async def search(req: SearchRequest) -> JSONResponse:
+    accounts = await _get_accounts()
+    if not accounts:
+        return JSONResponse({"error": "No Immich accounts configured/reachable"}, status_code=503)
+
     try:
         _header, _, data = req.image_base64.partition(",")
         image_bytes = base64.b64decode(data if data else req.image_base64)
@@ -176,21 +245,23 @@ async def search(req: SearchRequest) -> JSONResponse:
         return JSONResponse({"error": "No face detected in image"}, status_code=422)
 
     top_k = getattr(_args, "top_k", 20)
-    results = _search_immich(embedding, top_k)
+    results = _search_immich(embedding, top_k, accounts)
     return JSONResponse({"results": results, "count": len(results)})
 
 
-@app.get("/api/thumb/{person_id}")
-async def thumb_proxy(person_id: str) -> Response:
-    """Proxy person thumbnail from Immich API (adds auth header)."""
+@app.get("/api/thumb/{owner_id}/{person_id}")
+async def thumb_proxy(owner_id: str, person_id: str) -> Response:
+    """Proxy person thumbnail from Immich API, using the owning account's API key."""
+    accounts = await _get_accounts()
+    account = next((a for a in accounts if a.user_id == owner_id), None)
+    if account is None:
+        return Response(status_code=404)
+
     client = await _get_http_client()
-    headers: dict[str, str] = {}
-    if IMMICH_API_KEY:
-        headers["x-api-key"] = IMMICH_API_KEY
     try:
         resp = await client.get(
             f"{IMMICH_URL}/api/people/{person_id}/thumbnail",
-            headers=headers,
+            headers={"x-api-key": account.api_key},
         )
     except httpx.HTTPError:
         return Response(status_code=502)
@@ -243,7 +314,13 @@ h1 { text-align: center; margin-bottom: 20px; color: #e94560; font-size: 24px; }
 }
 .card:hover { transform: translateY(-4px); }
 .card a { text-decoration: none; color: inherit; }
+.card { position: relative; }
 .card .thumb { width: 100%; height: 200px; object-fit: cover; background: #0f3460; }
+.card .account-badge {
+    position: absolute; top: 8px; left: 8px; padding: 3px 8px;
+    background: rgba(15, 52, 96, 0.85); color: #e0e0e0;
+    font-size: 11px; border-radius: 6px; pointer-events: none;
+}
 .card .info { padding: 12px; }
 .card .name { font-size: 16px; font-weight: 600; color: #e94560; }
 .card .dist { font-size: 13px; color: #888; margin-top: 4px; }
@@ -383,6 +460,7 @@ function renderCard(r) {
     <div class="card">
         <a href="${immichBase}/people/${r.person_id}" target="_blank">
             <img class="thumb" src="${r.thumb_url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22><rect fill=%22%230f3460%22 width=%22200%22 height=%22200%22/><text x=%22100%22 y=%22110%22 text-anchor=%22middle%22 fill=%22%23888%22 font-size=%2240%22>?</text></svg>'" alt="${r.name}">
+            <div class="account-badge">${r.account}</div>
             <div class="info">
                 <div class="name">${r.name}</div>
                 <div class="dist">Distance: ${r.distance.toFixed(3)} (${pct.toFixed(0)}% match)</div>
