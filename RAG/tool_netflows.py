@@ -143,11 +143,18 @@ class Settings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 class PortSpec(BaseModel):
-    """Протокол и диапазон портов из ячейки «протокол/порт»."""
+    """Протокол и диапазон портов назначения из ячейки «протокол/порт».
+
+    В картах колонка называется «Входящие соединения, протокол/порт» — это порт,
+    на котором принимает соединение получатель. Порт источника эфемерный
+    (назначается стеком при открытии сокета), в документах не указывается и здесь
+    не хранится. `port_min`/`port_max` — границы диапазона: `TCP/49152–65535`
+    даёт min=49152, max=65535, одиночный порт — min == max.
+    """
 
     protocol: str
-    port_from: int = 0
-    port_to: int = 0
+    port_min: int = 0
+    port_max: int = 0
     service: str = ""
     raw: str = ""
 
@@ -178,7 +185,10 @@ class FlowRule(BaseModel):
 
 
 class Flow(BaseModel):
-    """Развёрнутый поток: один адрес источника, один получателя, один порт."""
+    """Развёрнутый поток: адрес источника, адрес получателя, порт назначения.
+
+    Порт всегда относится к получателю (см. PortSpec).
+    """
 
     flow_id: str
     map_name: str
@@ -191,8 +201,8 @@ class Flow(BaseModel):
     dst_addr: str
     dst_is_cidr: int
     protocol: str
-    port_from: int
-    port_to: int
+    dst_port_min: int
+    dst_port_max: int
     service: str
     port_raw: str
     src_text: str
@@ -279,12 +289,12 @@ def parse_ports(text: str) -> list[PortSpec]:
     specs: list[PortSpec] = []
     seen: set[tuple[str, int, int]] = set()
 
-    def add(protocol: str, port_from: int, port_to: int, service: str, raw: str) -> None:
-        key = (protocol, port_from, port_to)
+    def add(protocol: str, port_min: int, port_max: int, service: str, raw: str) -> None:
+        key = (protocol, port_min, port_max)
         if key in seen:
             return
         seen.add(key)
-        specs.append(PortSpec(protocol=protocol, port_from=port_from, port_to=port_to,
+        specs.append(PortSpec(protocol=protocol, port_min=port_min, port_max=port_max,
                               service=service, raw=raw.strip()))
 
     # Имена сервисов, указанные перед портом, запоминаем по позиции
@@ -315,9 +325,9 @@ def parse_ports(text: str) -> list[PortSpec]:
         protocol = _normalize_protocol(match.group("proto"))
         if protocol not in _KNOWN_PROTOCOLS:
             continue
-        port_from = int(match.group("from"))
-        port_to = int(match.group("to") or port_from)
-        add(protocol, port_from, port_to, (match.group("service") or "").upper(), match.group(0))
+        port_min = int(match.group("from"))
+        port_max = int(match.group("to") or port_min)
+        add(protocol, port_min, port_max, (match.group("service") or "").upper(), match.group(0))
         consumed.append(match.span())
 
     for match in _PORT_PROTO_RE.finditer(normalized):
@@ -326,17 +336,17 @@ def parse_ports(text: str) -> list[PortSpec]:
         protocol = _normalize_protocol(match.group("proto"))
         if protocol not in _KNOWN_PROTOCOLS:
             continue
-        port_from = int(match.group("from"))
-        port_to = int(match.group("to") or port_from)
-        add(protocol, port_from, port_to, services_at.get(match.start(), ""), match.group(0))
+        port_min = int(match.group("from"))
+        port_max = int(match.group("to") or port_min)
+        add(protocol, port_min, port_max, services_at.get(match.start(), ""), match.group(0))
         consumed.append(match.span())
 
     for match in _PROTO_SPACE_PORT_RE.finditer(normalized):
         if overlaps(*match.span()):
             continue
-        port_from = int(match.group("from"))
-        port_to = int(match.group("to") or port_from)
-        add(_normalize_protocol(match.group("proto")), port_from, port_to, "", match.group(0))
+        port_min = int(match.group("from"))
+        port_max = int(match.group("to") or port_min)
+        add(_normalize_protocol(match.group("proto")), port_min, port_max, "", match.group(0))
         consumed.append(match.span())
 
     for match in _BARE_PROTO_RE.finditer(normalized):
@@ -456,7 +466,7 @@ def expand_rule(rule: FlowRule) -> Iterator[Flow]:
             for port in ports:
                 key = "|".join([
                     rule.map_name, rule.source, rule.section, str(rule.chunk_index),
-                    src_addr, dst_addr, port.protocol, str(port.port_from), str(port.port_to),
+                    src_addr, dst_addr, port.protocol, str(port.port_min), str(port.port_max),
                 ])
                 yield Flow(
                     flow_id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
@@ -470,8 +480,8 @@ def expand_rule(rule: FlowRule) -> Iterator[Flow]:
                     dst_addr=dst_addr,
                     dst_is_cidr=int("/" in dst_addr),
                     protocol=port.protocol,
-                    port_from=port.port_from,
-                    port_to=port.port_to,
+                    dst_port_min=port.port_min,
+                    dst_port_max=port.port_max,
                     service=port.service,
                     port_raw=port.raw,
                     src_text=rule.src_text,
@@ -499,8 +509,8 @@ CREATE TABLE IF NOT EXISTS {database}.{table}
     dst_addr     String,
     dst_is_cidr  UInt8,
     protocol     LowCardinality(String),
-    port_from    UInt32,
-    port_to      UInt32,
+    dst_port_min UInt32,
+    dst_port_max UInt32,
     service      LowCardinality(String),
     port_raw     String,
     src_text     String,
@@ -510,13 +520,13 @@ CREATE TABLE IF NOT EXISTS {database}.{table}
     imported_at  DateTime
 )
 ENGINE = ReplacingMergeTree(imported_at)
-ORDER BY (map_name, src_addr, dst_addr, protocol, port_from, port_to, flow_id)
+ORDER BY (map_name, src_addr, dst_addr, protocol, dst_port_min, dst_port_max, flow_id)
 """
 
 _COLUMNS = [
     "flow_id", "map_name", "source", "section", "chunk_index", "row_no",
     "src_addr", "src_is_cidr", "dst_addr", "dst_is_cidr",
-    "protocol", "port_from", "port_to", "service", "port_raw",
+    "protocol", "dst_port_min", "dst_port_max", "service", "port_raw",
     "src_text", "dst_text", "ports_text", "rule_desc", "imported_at",
 ]
 
@@ -546,7 +556,7 @@ def insert_flows(client: Client, settings: Settings, flows: list[Flow], imported
         [
             flow.flow_id, flow.map_name, flow.source, flow.section, flow.chunk_index, flow.row_no,
             flow.src_addr, flow.src_is_cidr, flow.dst_addr, flow.dst_is_cidr,
-            flow.protocol, flow.port_from, flow.port_to, flow.service, flow.port_raw,
+            flow.protocol, flow.dst_port_min, flow.dst_port_max, flow.service, flow.port_raw,
             flow.src_text, flow.dst_text, flow.ports_text, flow.rule_desc, imported_at,
         ]
         for flow in flows
@@ -597,7 +607,7 @@ def cmd_preview(args: argparse.Namespace, settings: Settings, client: Client) ->
         print(f"  получатели ({len(rule.dst_addresses)}): {', '.join(rule.dst_addresses) or '— не найдено —'}")
         print(f"     текст: {rule.dst_text[:110]}")
         ports = ", ".join(
-            f"{p.protocol}/{p.port_from}" + (f"-{p.port_to}" if p.port_to != p.port_from else "")
+            f"{p.protocol}/{p.port_min}" + (f"-{p.port_max}" if p.port_max != p.port_min else "")
             + (f" ({p.service})" if p.service else "")
             for p in rule.ports
         )
@@ -686,8 +696,8 @@ def cmd_stats(args: argparse.Namespace, settings: Settings, client: Client) -> N
 
     print("\nТоп-15 портов:")
     for port, count in client.query(
-        f"SELECT port_from, count() FROM {table} FINAL WHERE port_from > 0 "
-        f"GROUP BY port_from ORDER BY count() DESC LIMIT 15"
+        f"SELECT dst_port_min, count() FROM {table} FINAL WHERE dst_port_min > 0 "
+        f"GROUP BY dst_port_min ORDER BY count() DESC LIMIT 15"
     ).result_rows:
         print(f"  {port:8d} {count:8d}")
     print()
@@ -709,7 +719,7 @@ def cmd_query(args: argparse.Namespace, settings: Settings, client: Client) -> N
                      "isIPAddressInRange({dst:String}, dst_addr)))")
         params["dst"] = args.dst
     if args.port is not None:
-        where.append("(port_from <= {port:UInt32} AND port_to >= {port:UInt32})")
+        where.append("(dst_port_min <= {port:UInt32} AND dst_port_max >= {port:UInt32})")
         params["port"] = args.port
     if args.proto:
         where.append("upper(protocol) = upper({proto:String})")
@@ -729,9 +739,9 @@ def cmd_query(args: argparse.Namespace, settings: Settings, client: Client) -> N
     ).result_rows[0][0]
 
     rows = client.query(
-        f"SELECT src_addr, dst_addr, protocol, port_from, port_to, map_name, rule_desc "
+        f"SELECT src_addr, dst_addr, protocol, dst_port_min, dst_port_max, map_name, rule_desc "
         f"FROM {table} FINAL WHERE {condition} "
-        f"ORDER BY map_name, src_addr, dst_addr, port_from LIMIT {{lim:UInt32}}",
+        f"ORDER BY map_name, src_addr, dst_addr, dst_port_min LIMIT {{lim:UInt32}}",
         parameters=params,
     ).result_rows
 
@@ -756,11 +766,11 @@ def cmd_export(args: argparse.Namespace, settings: Settings, client: Client) -> 
         params["proto"] = args.proto
     condition = " AND ".join(where) if where else "1"
 
-    columns = ["map_name", "src_addr", "dst_addr", "protocol", "port_from", "port_to",
+    columns = ["map_name", "src_addr", "dst_addr", "protocol", "dst_port_min", "dst_port_max",
                "service", "rule_desc", "source", "section"]
     rows = client.query(
         f"SELECT {', '.join(columns)} FROM {table} FINAL WHERE {condition} "
-        f"ORDER BY map_name, src_addr, dst_addr, port_from",
+        f"ORDER BY map_name, src_addr, dst_addr, dst_port_min",
         parameters=params,
     ).result_rows
 
