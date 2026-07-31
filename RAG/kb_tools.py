@@ -1187,16 +1187,23 @@ def create_kb_tools(
         """
         logger.debug(f"Tool search_abbreviation: query='{query}'")
 
+        # LLM нередко передаёт значение в кавычках или с пунктуацией вокруг —
+        # это не повод отказывать в поиске
+        abbreviation = query.strip().strip('"\'«»`.,;:!?()[]{}').strip()
+        if abbreviation != query:
+            logger.debug(f"search_abbreviation: очищено '{query}' -> '{abbreviation}'")
+
         try:
-            pattern = _build_abbreviation_pattern(query)
+            pattern = _build_abbreviation_pattern(abbreviation)
         except ValueError as e:
-            logger.error(f"Invalid abbreviation '{query}': {e}")
+            logger.error(f"Invalid abbreviation '{abbreviation}': {e}")
             return AbbreviationExpansionResult(
-                abbreviation=query,
+                abbreviation=abbreviation,
                 expansions=[],
                 total_found=0,
                 pattern_used=""
             )
+        query = abbreviation
 
         rec = _db_request(
             "DB:search_abbreviation",

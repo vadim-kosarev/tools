@@ -245,6 +245,8 @@ python kb_tools.py build-section-index         # пересборка индек
 | `RETRIEVER_TOP_K` | Количество результатов семантического поиска |
 | `AGENT_MAX_ITERATIONS` | Максимум раундов вызова инструментов в `rag_agent.py` |
 | `AGENT_MAX_TOOL_CHARS` | Предел символов результата инструмента, отдаваемого LLM |
+| `OLLAMA_NUM_PREDICT` | Максимум токенов в ответе (2048) |
+| `OLLAMA_REASONING` | `true` — разрешить блок рассуждений; по умолчанию `false` |
 | `OLLAMA_TIMEOUT` | Таймаут запроса к Ollama, секунды |
 | `LOG_LEVEL` | Уровень логирования (DEBUG/INFO/WARNING/ERROR) |
 | `MCP_HTTP_HOST` | Хост MCP HTTP сервера (по умолчанию `0.0.0.0`) |

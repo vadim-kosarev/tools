@@ -30,6 +30,7 @@ import re
 import logging
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +49,8 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import OllamaEmbeddings, ChatOllama
+
+from chunking import render_row_for_output
 from logging_config import setup_logging
 
 
@@ -85,10 +88,13 @@ class Settings(BaseSettings):
     # Retrieval
     retriever_top_k: int = 10
     log_level: str = "DEBUG"               # logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    # LLM
+    ollama_num_predict: int = 2048         # max tokens per answer
+    ollama_reasoning: bool = False         # True — разрешить модели блок рассуждений (медленно)
+    ollama_timeout: float = 300.0          # seconds, per LLM request
     # Agent (rag_agent.py)
     agent_max_iterations: int = 6          # max tool-calling rounds before forcing an answer
     agent_max_tool_chars: int = 12_000     # per-tool-result cap fed back to the LLM
-    ollama_timeout: float = 300.0          # seconds, per LLM request
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -318,17 +324,35 @@ PROMPT_TEMPLATE = """\
 
 
 def build_llm(model: Optional[str] = None) -> ChatOllama:
+    """Создаёт клиента локальной LLM.
+
+    reasoning=False отключает блок рассуждений: модели вроде qwen3.5 иначе тратят
+    на него весь бюджет num_predict, и до текста ответа дело может не дойти.
+    Таймаут обязателен — без него зависший Ollama держит процесс бесконечно.
+    """
     return ChatOllama(
         model=model or settings.ollama_model,
         base_url=settings.ollama_base_url,
         temperature=0.1,
-        num_predict=4096,
+        num_predict=settings.ollama_num_predict,
+        reasoning=settings.ollama_reasoning,
         streaming=True,
+        client_kwargs={"timeout": settings.ollama_timeout},
     )
 
 
-def ask_question(vectorstore: ClickHouseVectorStore, llm: ChatOllama, question: str) -> RagAnswer:
-    """Выполняет RAG-запрос: поиск → контекст → генерация ответа."""
+def ask_question(
+    vectorstore: ClickHouseVectorStore,
+    llm: ChatOllama,
+    question: str,
+    on_token: Optional[Callable[[str], None]] = None,
+) -> RagAnswer:
+    """Выполняет RAG-запрос: поиск → контекст → генерация ответа.
+
+    Args:
+        on_token: если задан, ответ отдаётся по мере генерации — вызывается на
+                  каждый фрагмент. Иначе результат собирается целиком.
+    """
     source_docs = vectorstore.similarity_search(question, k=settings.retriever_top_k)
     sources = list({doc.metadata.get("source", "?") for doc in source_docs})
 
@@ -337,7 +361,9 @@ def ask_question(vectorstore: ClickHouseVectorStore, llm: ChatOllama, question: 
         src = doc.metadata.get("source", "?")
         section = doc.metadata.get("section", "")
         header = f"[{src}]" + (f" — {section}" if section else "")
-        context_parts.append(f"{header}\n{doc.page_content}")
+        # Строки таблиц хранятся значениями — без имён колонок они нечитаемы
+        content = render_row_for_output(doc.page_content, doc.metadata.get("table_headers"))
+        context_parts.append(f"{header}\n{content}")
     context = "\n\n---\n\n".join(context_parts)
 
     logger.debug(
@@ -350,7 +376,16 @@ def ask_question(vectorstore: ClickHouseVectorStore, llm: ChatOllama, question: 
 
     prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
     chain = prompt | llm | StrOutputParser()
-    answer = chain.invoke({"context": context, "question": question})
+    payload = {"context": context, "question": question}
+
+    if on_token is None:
+        answer = chain.invoke(payload)
+    else:
+        parts: list[str] = []
+        for piece in chain.stream(payload):
+            parts.append(piece)
+            on_token(piece)
+        answer = "".join(parts)
 
     logger.info(
         f"Ответ сформирован\n"
@@ -373,6 +408,25 @@ def print_rag_answer(rag: RagAnswer) -> None:
     print(SEP)
     print(rag.answer)
     print(f"\nИсточники: {', '.join(rag.source_files)}")
+    print(SEP)
+
+
+def ask_and_print(vectorstore: ClickHouseVectorStore, llm: ChatOllama, question: str) -> None:
+    """Задаёт вопрос и печатает ответ потоком, по мере генерации.
+
+    Потоковый вывод здесь не украшение: локальная модель выдаёт около десятка
+    токенов в секунду, и без него длинный ответ выглядит зависанием.
+    """
+    print(f"\n{SEP}")
+    print(f"Вопрос: {question}")
+    print(f"{SEP}\n", flush=True)
+
+    def emit(piece: str) -> None:
+        print(piece, end="", flush=True)
+
+    rag = ask_question(vectorstore, llm, question, on_token=emit)
+
+    print(f"\n\nИсточники: {', '.join(rag.source_files)}")
     print(SEP)
 
 
@@ -401,7 +455,7 @@ def run_interactive_chat(vectorstore: ClickHouseVectorStore, llm: ChatOllama) ->
             print("До свидания!")
             break
 
-        print_rag_answer(ask_question(vectorstore, llm, question))
+        ask_and_print(vectorstore, llm, question)
 
 
 # ---------------------------------------------------------------------------
@@ -443,7 +497,7 @@ def main() -> None:
     llm = build_llm()
 
     if args.question:
-        print_rag_answer(ask_question(vectorstore, llm, " ".join(args.question)))
+        ask_and_print(vectorstore, llm, " ".join(args.question))
     else:
         run_interactive_chat(vectorstore, llm)
 

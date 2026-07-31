@@ -193,6 +193,8 @@ class KnowledgeBaseAgent:
             available = ", ".join(sorted(self._tools))
             return f"Инструмент '{name}' не существует. Доступны: {available}", invocation, []
 
+        arguments = _coerce_arguments(tool, arguments)
+
         try:
             raw_result = tool.invoke(arguments)
         except Exception as exc:
@@ -200,7 +202,13 @@ class KnowledgeBaseAgent:
             logger.warning(f"Инструмент {name} завершился ошибкой: {exc}")
             invocation = ToolInvocation(name=name, arguments=arguments, ok=False,
                                         duration_ms=duration, error=str(exc))
-            return f"Ошибка вызова '{name}': {exc}", invocation, []
+            # Модели нужен не стектрейс, а перечень параметров, чтобы повторить вызов
+            return (
+                f"Ошибка вызова '{name}': {exc}\n"
+                f"Параметры инструмента: {_describe_parameters(tool)}. "
+                f"Исправь аргументы и вызови инструмент ещё раз.",
+                invocation, [],
+            )
 
         duration = int((time.monotonic() - started) * 1000)
         payload = _to_jsonable(raw_result)
@@ -264,6 +272,53 @@ class KnowledgeBaseAgent:
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
+
+def _tool_parameters(tool: BaseTool) -> dict[str, Any]:
+    """Поля схемы аргументов инструмента (пустой словарь, если схемы нет)."""
+    schema = getattr(tool, "args_schema", None)
+    return getattr(schema, "model_fields", {}) or {}
+
+
+def _describe_parameters(tool: BaseTool) -> str:
+    """Перечень параметров инструмента с пометкой обязательных — для сообщения модели."""
+    fields = _tool_parameters(tool)
+    if not fields:
+        return "без параметров"
+    return ", ".join(
+        name if field.is_required() else f"{name} (необязательный)"
+        for name, field in fields.items()
+    )
+
+
+def _coerce_arguments(tool: BaseTool, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Приводит аргументы от LLM к схеме инструмента.
+
+    Локальные модели регулярно ошибаются одинаково: берут значение в кавычки и
+    придумывают имя параметра (term вместо query). Обе ошибки чинятся однозначно —
+    первая всегда, вторая когда неизвестный ключ ровно один и незаполненный
+    обязательный параметр тоже один.
+    """
+    fields = _tool_parameters(tool)
+    if not fields:
+        return arguments
+
+    cleaned = {
+        key: value.strip().strip('"\'«»`') if isinstance(value, str) else value
+        for key, value in arguments.items()
+    }
+
+    unknown = [key for key in cleaned if key not in fields]
+    if len(unknown) == 1:
+        missing = [
+            name for name, field in fields.items()
+            if field.is_required() and name not in cleaned
+        ]
+        if len(missing) == 1:
+            logger.info(f"Аргумент '{unknown[0]}' переименован в '{missing[0]}' по схеме {tool.name}")
+            cleaned[missing[0]] = cleaned.pop(unknown[0])
+
+    return cleaned
+
 
 def _tool_calls_of(message: BaseMessage) -> list[dict[str, Any]]:
     """Извлекает вызовы инструментов из ответа модели (пустой список — финальный ответ)."""
@@ -338,7 +393,8 @@ def build_agent() -> KnowledgeBaseAgent:
         model=settings.ollama_model,
         base_url=settings.ollama_base_url,
         temperature=0.1,
-        num_predict=4096,
+        num_predict=settings.ollama_num_predict,
+        reasoning=settings.ollama_reasoning,
         client_kwargs={"timeout": settings.ollama_timeout},
     )
     logger.info(
