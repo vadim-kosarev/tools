@@ -28,7 +28,7 @@ import re
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 from xml.etree import ElementTree
 
 from docx import Document as open_docx
@@ -36,7 +36,7 @@ from docx.document import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
-from docx.table import Table, _Cell
+from docx.table import Table, _Cell, _Row
 from docx.text.paragraph import Paragraph
 from langchain_core.documents import Document
 
@@ -272,30 +272,96 @@ def _looks_like_header(row: list[str]) -> bool:
     return all(len(cell.strip()) <= _MAX_HEADER_CELL_CHARS for cell in row)
 
 
+def _marked_as_header(row: _Row) -> bool:
+    """True if Word marks the row as a repeating header (`w:tblHeader`)."""
+    properties = row._tr.trPr
+    return properties is not None and properties.find(qn("w:tblHeader")) is not None
+
+
+def _cell_is_bold(cell: _Cell) -> bool:
+    """True if all visible text of the cell is bold (directly or via its style)."""
+    paragraphs = [p for p in cell.paragraphs if p.text.strip()]
+    if not paragraphs:
+        return False
+
+    runs = [run for p in paragraphs for run in p.runs if run.text.strip()]
+    if runs and all(run.bold for run in runs):
+        return True
+    return all(p.style is not None and p.style.font.bold for p in paragraphs)
+
+
+def _cell_is_shaded(cell: _Cell) -> bool:
+    """True if the cell has a background fill (a common header decoration)."""
+    properties = cell._tc.tcPr
+    if properties is None:
+        return False
+    shading = properties.find(qn("w:shd"))
+    if shading is None:
+        return False
+    fill = shading.get(qn("w:fill")) or ""
+    return bool(fill) and fill.lower() not in ("auto", "ffffff")
+
+
+def _has_header_formatting(row: _Row) -> bool:
+    """Whether the row is visually marked up as a header row.
+
+    Word almost always distinguishes a header row: the "repeat as header" flag,
+    bold text or a background fill. Position alone is not evidence — glossary and
+    reference tables often start with data right away.
+    """
+    if _marked_as_header(row):
+        return True
+    cells = [cell for cell in row.cells if cell.text.strip()]
+    if not cells:
+        return False
+    return (all(_cell_is_bold(cell) for cell in cells)
+            or all(_cell_is_shaded(cell) for cell in cells))
+
+
+def _find_header_row(table: Table, rows: list[list[str]]) -> Optional[int]:
+    """Index of the header row, or None if the table has no header row.
+
+    A row qualifies only on visual evidence (see `_has_header_formatting`). When
+    the first row is a single merged caption spanning the width, the second row is
+    considered instead. Tables without evidence — glossaries and reference lists
+    that start with data — get synthetic column names, so no data row is consumed.
+    """
+    table_rows = table.rows
+
+    if (len(rows) >= 3 and _distinct_cells(rows[0]) <= 1
+            and (_has_header_formatting(table_rows[1]) or _looks_like_header(rows[1]))):
+        return 1
+
+    if _has_header_formatting(table_rows[0]) and any(cell.strip() for cell in rows[0]):
+        return 0
+
+    return None
+
+
 def _parse_table(table: Table) -> tuple[list[str], list[list[str]]]:
     """Extract (headers, data_rows) from a Word table.
 
-    The first row is normally the header row. When it is one merged cell spanning
-    the full width (a caption or category above the real header), its text repeats
-    across every column; the second row is then used as the header, but only if it
-    looks like one — otherwise the table has no header row of its own and the
-    repeated caption is kept (deduplicated later), so no data row is lost.
-
     Merged cells repeat their text in `row.cells`, so all rows keep equal width.
+    Headers of a header-less table are synthesised as empty strings and get their
+    `Колонка N` names in `chunking.normalize_headers`.
     """
     rows = [[_cell_text(cell) for cell in row.cells] for row in table.rows]
     if not rows:
         return [], []
 
-    header_index = 0
-    if len(rows) >= 3 and _distinct_cells(rows[0]) <= 1 and _looks_like_header(rows[1]):
-        header_index = 1
+    header_index = _find_header_row(table, rows)
 
-    headers = rows[header_index]
-    if not any(header.strip() for header in headers):
+    if header_index is None:
+        width = max(len(row) for row in rows)
+        headers = [""] * width
+        data_rows = rows
+    else:
+        headers = rows[header_index]
+        data_rows = rows[header_index + 1:]
+
+    data_rows = [row for row in data_rows if any(cell.strip() for cell in row)]
+    if not data_rows:
         return [], []
-
-    data_rows = [row for row in rows[header_index + 1:] if any(cell.strip() for cell in row)]
     return headers, data_rows
 
 

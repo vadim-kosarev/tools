@@ -35,6 +35,7 @@ from langchain_core.documents import Document
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
+from chunking import render_row_for_output
 from clickhouse_store import ClickHouseVectorStore
 from llm_call_logger import LlmCallLogger
 
@@ -253,9 +254,13 @@ def _doc_to_chunk_metadata(meta: dict) -> ChunkMetadata:
 
 
 def _doc_to_chunk_result(doc: Document, score: Optional[float] = None) -> ChunkResult:
-    """Конвертер Document → ChunkResult"""
+    """Конвертер Document → ChunkResult.
+
+    Строки таблиц отдаются с именами колонок: в хранилище лежат голые значения,
+    и без заголовков такой чанк нечитаем.
+    """
     return ChunkResult(
-        content=doc.page_content,
+        content=render_row_for_output(doc.page_content, doc.metadata.get('table_headers')),
         metadata=_doc_to_chunk_metadata(doc.metadata),
         score=score
     )
@@ -274,7 +279,7 @@ def _docs_with_scores_to_chunk_results(docs_scores: list[tuple[Document, float]]
 def _doc_to_scored_chunk(doc: Document, score: float) -> ScoredChunkResult:
     """Конвертер Document + score → ScoredChunkResult"""
     return ScoredChunkResult(
-        content=doc.page_content,
+        content=render_row_for_output(doc.page_content, doc.metadata.get('table_headers')),
         metadata=_doc_to_chunk_metadata(doc.metadata),
         score=score
     )
@@ -1232,23 +1237,9 @@ def create_kb_tools(
                 best_doc = docs[0]
 
             if best_doc:
-                chunk = ChunkResult(
-                    content=best_doc.page_content,
-                    metadata=ChunkMetadata(
-                        chunk_id=best_doc.metadata.get('chunk_id', ''),
-                        source=best_doc.metadata.get('source', ''),
-                        section=best_doc.metadata.get('section', ''),
-                        chunk_type=best_doc.metadata.get('chunk_type', ''),
-                        line_start=best_doc.metadata.get('line_start', 0),
-                        line_end=best_doc.metadata.get('line_end', 0),
-                        chunk_index=best_doc.metadata.get('chunk_index', 0),
-                        table_headers=best_doc.metadata.get('table_headers')
-                    ),
-                    score=None
-                )
                 expansion_items.append(AbbreviationExpansionItem(
                     expansion=expansion,
-                    chunk=chunk
+                    chunk=_doc_to_chunk_result(best_doc)
                 ))
 
         result = AbbreviationExpansionResult(

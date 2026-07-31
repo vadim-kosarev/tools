@@ -3,8 +3,9 @@
 normalize_for_embedding() converts raw stored content into clean meaningful
 text before it is passed to an embedding model:
 
-  - table_row JSON object → "column value" pairs joined with space
-  - JSON array (legacy)   → cell values joined with space
+  - table_row JSON array  → "column value" pairs when the column names are
+                            supplied, otherwise bare cell values
+  - table_row JSON object → "column value" pairs (rows written by older versions)
   - Markdown table markup → removed (|, +, ---, ===)
   - Newlines / tabs       → single space
   - Punctuation           → removed (replaced with space)
@@ -30,37 +31,59 @@ _MD_PIPE_RE = re.compile(r'[|+]')
 _PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 
 
-def normalize_for_embedding(text: str) -> str:
+def _parse_headers(table_headers: str) -> list[str]:
+    """Parse the table_headers JSON array; empty list if absent or malformed."""
+    if not table_headers or not table_headers.strip().startswith('['):
+        return []
+    try:
+        parsed = json.loads(table_headers)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [str(column) for column in parsed] if isinstance(parsed, list) else []
+
+
+def normalize_for_embedding(text: str, table_headers: str = "") -> str:
     """Return a clean, embedding-friendly representation of stored content.
 
-    Handles four content formats transparently:
-      - JSON object (table_row): column names and values, so a row carries its
-        own column context into the vector
-      - JSON array (table_row written by older versions): values only
+    Handles the stored content formats transparently:
+      - JSON array (table_row): joined with the column names from `table_headers`
+        so the vector carries the row's own column context; without headers the
+        bare values are used
+      - JSON object (table_row written by older versions): key-value pairs
       - Raw markdown table (table_full / table_raw): markup stripped
       - Plain prose text: whitespace / punctuation normalised
 
     IP addresses (e.g. 10.0.0.1, 192.168.0.0/24) are preserved intact.
 
     Args:
-        text: Raw page_content value as stored in the chunks table.
+        text:          Raw page_content value as stored in the chunks table.
+        table_headers: JSON array of column names for table chunks (optional).
 
     Returns:
         Normalised plain-text string ready for embedding.
     """
-    # ── 1. Unpack JSON table row (object or legacy array) ────────────────────
+    # ── 1. Unpack JSON table row (array of values or legacy object) ──────────
     stripped = text.strip()
     if stripped[:1] in ('{', '['):
         try:
             parsed = json.loads(stripped)
         except (json.JSONDecodeError, TypeError):
             parsed = None  # fall through to generic handling
+
         if isinstance(parsed, dict):
             text = ' '.join(
                 f'{key} {value}' for key, value in parsed.items() if str(value).strip()
             )
         elif isinstance(parsed, list):
-            text = ' '.join(str(cell) for cell in parsed if cell)
+            columns = _parse_headers(table_headers)
+            if columns:
+                text = ' '.join(
+                    f'{column} {value}'
+                    for column, value in zip(columns, parsed)
+                    if str(value).strip()
+                )
+            else:
+                text = ' '.join(str(cell) for cell in parsed if cell)
 
     # ── 2. Remove markdown table separator lines (|---|, +---+, ====) ─────────
     text = _MD_TABLE_SEP_RE.sub(' ', text)

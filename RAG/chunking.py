@@ -9,14 +9,16 @@ Chunk types produced by splitters:
   ""                Prose size-chunk (fragment of a paragraph/list/cell block)
   "paragraph_full"  Full prose block as-is (before size splitting)
   "table_row"       One data row:
-                      content       = JSON object {"column": "value", ...}
-                      table_headers = JSON array of header strings (column order)
+                      content       = JSON array of cell values ["v1", "v2"]
+                      table_headers = JSON array of column names (same order)
   "table_full"      Full table rendered as text
   "table_raw"       Unparseable table stored verbatim
 
-Storing a row as a column-to-value object makes it self-describing: the column
-names end up in the embedded text and in exact-search matches, and reading a row
-back needs no join with the header list.
+A row is stored as a bare value array so that substring and regex search match
+only actual data: column names repeat in every row of a table, and searching a
+common word like "Описание" would otherwise return a third of all table rows.
+Column names are joined back where they add value — in the text sent to the
+embedding model and in tool output (`row_to_object`).
 
 ``chunk_index`` is sequential **within** the same (section, chunk_type) scope of
 one source document; `ChunkIndexer` owns those counters.
@@ -26,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from typing import Optional
 
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
@@ -189,6 +192,38 @@ def row_to_object(headers: list[str], cells: list[str]) -> dict[str, str]:
     return dict(zip(headers, padded))
 
 
+def render_row_for_output(content: str, table_headers: Optional[str]) -> str:
+    """Join a stored value array with its column names for human/LLM consumption.
+
+    Storage keeps bare values so that text search matches data only; anything that
+    shows a row to a reader wants the columns attached. Content that is not a
+    value array (prose, whole tables, rows written as objects) is returned as-is.
+    """
+    values = parse_json_list(content)
+    if values is None:
+        return content
+
+    columns = parse_json_list(table_headers or "")
+    if not columns:
+        return content
+
+    return json.dumps(
+        row_to_object([str(column) for column in columns], [str(value) for value in values]),
+        ensure_ascii=False,
+    )
+
+
+def parse_json_list(raw: str) -> Optional[list]:
+    """Parse a JSON array, returning None for anything else (incl. malformed)."""
+    if not raw or not raw.strip().startswith("["):
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return value if isinstance(value, list) else None
+
+
 def table_rows_to_documents(
     headers: list[str],
     data_rows: list[list[str]],
@@ -199,9 +234,11 @@ def table_rows_to_documents(
 ) -> list[Document]:
     """Create one Document per table data row.
 
-    page_content is a JSON object mapping column name to cell value; the
-    `table_headers` metadata keeps the column order for rendering the table back.
-    Headers are normalised first, so no column is lost to a duplicate or empty name.
+    page_content is a JSON array of the row's cell values; `table_headers` keeps
+    the column names in the same order. Headers are normalised first, so a
+    duplicate or empty name cannot collapse columns when the two are joined back.
+    Rows are padded or truncated to the header width, keeping cell N aligned with
+    column N.
     """
     columns = normalize_headers(headers)
     headers_json = json.dumps(columns, ensure_ascii=False)
@@ -209,8 +246,9 @@ def table_rows_to_documents(
 
     docs: list[Document] = []
     for row_idx, row_cells in enumerate(data_rows):
+        values = list(row_to_object(columns, row_cells).values())
         docs.append(Document(
-            page_content=json.dumps(row_to_object(columns, row_cells), ensure_ascii=False),
+            page_content=json.dumps(values, ensure_ascii=False),
             metadata=indexer.meta(
                 section, "table_row", line_start, line_end,
                 chunk_index=first_index + row_idx,

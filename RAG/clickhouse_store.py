@@ -178,7 +178,12 @@ class ClickHouseVectorStore(VectorStore):
         metadatas = metadatas or [{} for _ in texts_list]
 
         logger.debug(f"Embedding {len(texts_list)} texts for ClickHouse insert")
-        norm_texts = [normalize_for_embedding(t) for t in texts_list]
+        # Table rows are embedded together with their column names: the stored
+        # content holds bare values, which alone carry no column context.
+        norm_texts = [
+            normalize_for_embedding(text, str(meta.get("table_headers", "")))
+            for text, meta in zip(texts_list, metadatas)
+        ]
         vectors = self._embedding.embed_documents(norm_texts)
 
         rows: list[list] = []
