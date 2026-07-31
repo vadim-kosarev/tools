@@ -44,6 +44,7 @@ from chunking import (
     ChunkIndexer,
     SectionStack,
     clean_text,
+    normalize_headers,
     prose_to_documents,
     table_rows_to_documents,
 )
@@ -67,6 +68,9 @@ _SERVICE_HEADING_RE = re.compile(
 )
 
 _MAX_HEADING_LEVEL = 9
+
+# Максимальная длина ячейки, которую ещё можно принять за название колонки.
+_MAX_HEADER_CELL_CHARS = 80
 
 BlockItem = Union[Paragraph, Table]
 
@@ -252,20 +256,47 @@ def _cell_text(cell: _Cell) -> str:
     return " ".join(parts)
 
 
+def _distinct_cells(row: list[str]) -> int:
+    """Number of distinct non-empty values in a row."""
+    return len({cell.strip() for cell in row if cell.strip()})
+
+
+def _looks_like_header(row: list[str]) -> bool:
+    """Whether a row can plausibly serve as the header row.
+
+    Column names are short and distinct. A row with a long cell is data — such a
+    cell must never become a column name.
+    """
+    if _distinct_cells(row) < 2:
+        return False
+    return all(len(cell.strip()) <= _MAX_HEADER_CELL_CHARS for cell in row)
+
+
 def _parse_table(table: Table) -> tuple[list[str], list[list[str]]]:
     """Extract (headers, data_rows) from a Word table.
 
-    The first row is treated as the header row. Vertically/horizontally merged
-    cells repeat their text in `row.cells`, which keeps every row the same width.
+    The first row is normally the header row. When it is one merged cell spanning
+    the full width (a caption or category above the real header), its text repeats
+    across every column; the second row is then used as the header, but only if it
+    looks like one — otherwise the table has no header row of its own and the
+    repeated caption is kept (deduplicated later), so no data row is lost.
+
+    Merged cells repeat their text in `row.cells`, so all rows keep equal width.
     """
     rows = [[_cell_text(cell) for cell in row.cells] for row in table.rows]
     if not rows:
         return [], []
 
-    headers = [h for h in rows[0]]
-    if not any(headers):
+    header_index = 0
+    if len(rows) >= 3 and _distinct_cells(rows[0]) <= 1 and _looks_like_header(rows[1]):
+        header_index = 1
+
+    headers = rows[header_index]
+    if not any(header.strip() for header in headers):
         return [], []
-    return headers, [row for row in rows[1:] if any(cell.strip() for cell in row)]
+
+    data_rows = [row for row in rows[header_index + 1:] if any(cell.strip() for cell in row)]
+    return headers, data_rows
 
 
 def _render_table_text(headers: list[str], data_rows: list[list[str]]) -> str:
@@ -359,15 +390,16 @@ def split_docx_file(
         headers, data_rows = _parse_table(block)
 
         if headers and data_rows:
+            columns = normalize_headers(headers)
             docs.append(Document(
-                page_content=_render_table_text(headers, data_rows),
+                page_content=_render_table_text(columns, data_rows),
                 metadata=indexer.meta(
                     breadcrumb, "table_full", ordinal, ordinal,
-                    table_headers=json.dumps(headers, ensure_ascii=False),
+                    table_headers=json.dumps(columns, ensure_ascii=False),
                 ),
             ))
             docs.extend(table_rows_to_documents(
-                headers, data_rows, indexer, breadcrumb, ordinal, ordinal,
+                columns, data_rows, indexer, breadcrumb, ordinal, ordinal,
             ))
             logger.debug(
                 f"[{source_name}] table '{breadcrumb[:60]}': "

@@ -29,6 +29,7 @@ from chunking import (
     ChunkIndexer,
     SectionStack,
     clean_text,
+    normalize_headers,
     prose_to_documents,
     table_rows_to_documents,
 )
@@ -241,16 +242,17 @@ def split_md_file(
             raw_block = "\n".join(source_lines[ls:le]) if tok.map else ""
 
             if headers and data_rows:
+                columns = normalize_headers(headers)
                 if raw_block.strip():
                     docs.append(Document(
                         page_content=raw_block,
                         metadata=indexer.meta(
                             breadcrumb, "table_full", ls + 1, le,
-                            table_headers=json.dumps(headers, ensure_ascii=False),
+                            table_headers=json.dumps(columns, ensure_ascii=False),
                         ),
                     ))
                 docs.extend(table_rows_to_documents(
-                    headers, data_rows, indexer, breadcrumb, ls + 1, le,
+                    columns, data_rows, indexer, breadcrumb, ls + 1, le,
                 ))
                 logger.debug(
                     f"[{source_name}] pipe-table '{breadcrumb[:60]}': {len(data_rows)} rows"
@@ -278,15 +280,16 @@ def split_md_file(
             if raw_block and _is_grid_table(raw_block):
                 headers, data_rows = _parse_grid_table(raw_block.splitlines())
                 if headers and data_rows:
+                    columns = normalize_headers(headers)
                     docs.append(Document(
                         page_content=raw_block,
                         metadata=indexer.meta(
                             breadcrumb, "table_full", ls + 1, le,
-                            table_headers=json.dumps(headers, ensure_ascii=False),
+                            table_headers=json.dumps(columns, ensure_ascii=False),
                         ),
                     ))
                     docs.extend(table_rows_to_documents(
-                        headers, data_rows, indexer, breadcrumb, ls + 1, le,
+                        columns, data_rows, indexer, breadcrumb, ls + 1, le,
                     ))
                     logger.debug(
                         f"[{source_name}] grid-table '{breadcrumb[:60]}': {len(data_rows)} rows"

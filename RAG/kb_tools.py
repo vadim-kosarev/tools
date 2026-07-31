@@ -281,14 +281,36 @@ def _doc_to_scored_chunk(doc: Document, score: float) -> ScoredChunkResult:
 
 
 def _doc_to_table_row(doc: Document) -> TableRow:
-    """Конвертер Document → TableRow для table_row чанков"""
-    # Парсим content в формате "Column: value"
-    columns = {}
-    for line in doc.page_content.split('\n'):
-        if ':' in line:
-            key, val = line.split(':', 1)
-            columns[key.strip()] = val.strip()
-    
+    """Конвертер Document → TableRow для table_row чанков.
+
+    Основной формат content — JSON-объект {"колонка": "значение"}. Массив значений
+    (формат старых индексов) собирается в объект по table_headers из метаданных.
+    """
+    columns: dict[str, str] = {}
+    try:
+        parsed = json.loads(doc.page_content)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+
+    if isinstance(parsed, dict):
+        columns = {str(key): str(value) for key, value in parsed.items()}
+    elif isinstance(parsed, list):
+        try:
+            headers = json.loads(doc.metadata.get('table_headers') or '[]')
+        except (json.JSONDecodeError, TypeError):
+            headers = []
+        if not isinstance(headers, list) or not headers:
+            headers = [f'Колонка {i}' for i in range(1, len(parsed) + 1)]
+        columns = {
+            str(header): str(value)
+            for header, value in zip(headers, parsed)
+        }
+    else:
+        logger.warning(
+            f"table_row без разбираемого JSON: [{doc.metadata.get('source')}] "
+            f"{doc.page_content[:80]!r}"
+        )
+
     return TableRow(
         source=doc.metadata['source'],
         section=doc.metadata['section'],
@@ -427,14 +449,18 @@ def _query_table_chunks(
     source_file: Optional[str],
     limit: int,
 ) -> list[Document]:
-    """Queries table_row and table_full chunks matching a section substring.
+    """Queries table_row chunks matching a section substring.
+
+    Only row chunks are returned: they carry structured column-value data.
+    Whole-table chunks (table_full / table_raw) are plain text and belong to
+    get_section_content, not to a row-oriented result.
 
     Uses a cloned client per call to support concurrent tool execution.
     """
     client = vectorstore.clone()._client
     db, tbl = vectorstore._cfg.database, vectorstore._cfg.table
     where = ["positionCaseInsensitiveUTF8(section, {sec:String}) > 0",
-             "chunk_type IN ('table_row', 'table_full')"]
+             "chunk_type = 'table_row'"]
     params: dict = {"sec": section_substring, "lim": limit}
     if source_file:
         where.append("source = {src:String}")

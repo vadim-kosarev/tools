@@ -9,10 +9,14 @@ Chunk types produced by splitters:
   ""                Prose size-chunk (fragment of a paragraph/list/cell block)
   "paragraph_full"  Full prose block as-is (before size splitting)
   "table_row"       One data row:
-                      content       = JSON array of cell values, e.g. ["v1","v2"]
-                      table_headers = JSON array of header strings
+                      content       = JSON object {"column": "value", ...}
+                      table_headers = JSON array of header strings (column order)
   "table_full"      Full table rendered as text
   "table_raw"       Unparseable table stored verbatim
+
+Storing a row as a column-to-value object makes it self-describing: the column
+names end up in the embedded text and in exact-search matches, and reading a row
+back needs no join with the header list.
 
 ``chunk_index`` is sequential **within** the same (section, chunk_type) scope of
 one source document; `ChunkIndexer` owns those counters.
@@ -159,6 +163,32 @@ def split_text_by_size(text: str, chunk_size: int, chunk_overlap: int) -> list[s
 # Table expansion
 # ---------------------------------------------------------------------------
 
+def normalize_headers(headers: list[str], fallback_prefix: str = "Колонка") -> list[str]:
+    """Make a header list usable as object keys: non-empty and unique.
+
+    Merged header cells in Word repeat the same text across columns and empty
+    cells are common, so mapping cells onto raw headers would silently collapse
+    a row into fewer values. Empty headers become "Колонка N", repeats get a
+    numeric suffix; the column count is always preserved.
+    """
+    result: list[str] = []
+    seen: dict[str, int] = {}
+
+    for position, header in enumerate(headers, start=1):
+        name = (header or "").strip() or f"{fallback_prefix} {position}"
+        count = seen.get(name, 0) + 1
+        seen[name] = count
+        result.append(name if count == 1 else f"{name} ({count})")
+
+    return result
+
+
+def row_to_object(headers: list[str], cells: list[str]) -> dict[str, str]:
+    """Map a row's cells onto column names, padding or truncating to fit."""
+    padded = (cells + [""] * max(0, len(headers) - len(cells)))[: len(headers)]
+    return dict(zip(headers, padded))
+
+
 def table_rows_to_documents(
     headers: list[str],
     data_rows: list[list[str]],
@@ -169,18 +199,18 @@ def table_rows_to_documents(
 ) -> list[Document]:
     """Create one Document per table data row.
 
-    page_content is a JSON array of the row's cell values; `table_headers`
-    metadata is a JSON array of column headers. Rows shorter than the header
-    list are padded, longer ones truncated, so cell N always matches header N.
+    page_content is a JSON object mapping column name to cell value; the
+    `table_headers` metadata keeps the column order for rendering the table back.
+    Headers are normalised first, so no column is lost to a duplicate or empty name.
     """
-    headers_json = json.dumps(headers, ensure_ascii=False)
+    columns = normalize_headers(headers)
+    headers_json = json.dumps(columns, ensure_ascii=False)
     first_index = indexer.reserve(section, "table_row", len(data_rows))
 
     docs: list[Document] = []
     for row_idx, row_cells in enumerate(data_rows):
-        padded = (row_cells + [""] * max(0, len(headers) - len(row_cells)))[: len(headers)]
         docs.append(Document(
-            page_content=json.dumps(padded, ensure_ascii=False),
+            page_content=json.dumps(row_to_object(columns, row_cells), ensure_ascii=False),
             metadata=indexer.meta(
                 section, "table_row", line_start, line_end,
                 chunk_index=first_index + row_idx,

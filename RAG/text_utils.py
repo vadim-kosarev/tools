@@ -3,7 +3,8 @@
 normalize_for_embedding() converts raw stored content into clean meaningful
 text before it is passed to an embedding model:
 
-  - table_row JSON array  → cell values joined with space
+  - table_row JSON object → "column value" pairs joined with space
+  - JSON array (legacy)   → cell values joined with space
   - Markdown table markup → removed (|, +, ---, ===)
   - Newlines / tabs       → single space
   - Punctuation           → removed (replaced with space)
@@ -32,8 +33,10 @@ _PUNCT_RE = re.compile(r'[^\w\s]', re.UNICODE)
 def normalize_for_embedding(text: str) -> str:
     """Return a clean, embedding-friendly representation of stored content.
 
-    Handles three content formats transparently:
-      - JSON array (table_row): cell values joined with space
+    Handles four content formats transparently:
+      - JSON object (table_row): column names and values, so a row carries its
+        own column context into the vector
+      - JSON array (table_row written by older versions): values only
       - Raw markdown table (table_full / table_raw): markup stripped
       - Plain prose text: whitespace / punctuation normalised
 
@@ -45,15 +48,19 @@ def normalize_for_embedding(text: str) -> str:
     Returns:
         Normalised plain-text string ready for embedding.
     """
-    # ── 1. Unpack JSON cell array (table_row) ─────────────────────────────────
+    # ── 1. Unpack JSON table row (object or legacy array) ────────────────────
     stripped = text.strip()
-    if stripped.startswith('['):
+    if stripped[:1] in ('{', '['):
         try:
-            cells = json.loads(stripped)
-            if isinstance(cells, list):
-                text = ' '.join(str(c) for c in cells if c)
+            parsed = json.loads(stripped)
         except (json.JSONDecodeError, TypeError):
-            pass  # fall through to generic handling
+            parsed = None  # fall through to generic handling
+        if isinstance(parsed, dict):
+            text = ' '.join(
+                f'{key} {value}' for key, value in parsed.items() if str(value).strip()
+            )
+        elif isinstance(parsed, list):
+            text = ' '.join(str(cell) for cell in parsed if cell)
 
     # ── 2. Remove markdown table separator lines (|---|, +---+, ====) ─────────
     text = _MD_TABLE_SEP_RE.sub(' ', text)
