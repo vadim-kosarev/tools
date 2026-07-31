@@ -3,44 +3,55 @@
 ## Архитектура
 
 ```
-MCP-клиент (Continue.dev, Claude Code, ...)
-         |
-         | MCP protocol (HTTP или stdio)
-         |
-  kb_tools_mcp_http.py  /  kb_tools_mcp_stdio.py
-         |
-         | LangChain BaseTool.invoke()
-         |
-      kb_tools.py  (16 инструментов)
-         |
-         +---> clickhouse_store.py  (vector search, exact search)
-         |           |
-         |      ClickHouse DB  (soib_kcoi_v2.chunks)
-         |
-         +---> rag_chat.py  (regex_search, Settings)
+rag_agent.py (локальная LLM)        MCP-клиент (Continue.dev, Claude Code, ...)
+         |                                   |
+         | tool-calling                      | MCP protocol (HTTP или stdio)
+         |                                   |
+         |                    kb_tools_mcp_http.py / kb_tools_mcp_stdio.py
+         |                                   |
+         +---------------+-------------------+
+                         |
+                    kb_tools.py  (13 инструментов)
+                         |
+                         +---> clickhouse_store.py  (vector, exact, regex, ngram)
+                         |            |
+                         |       ClickHouse DB  (chunks + chunks_sections)
+                         |
+                         +---> rag_chat.py  (Settings, индексация)
 ```
 
-Все инструменты читают данные исключительно из ClickHouse. Исходные `.md`-файлы
-используются только при индексации (`rag_chat.py --reindex` / `md_splitter.py`).
+Все инструменты читают данные исключительно из ClickHouse. Исходные документы
+используются только при индексации (`rag_chat.py --reindex`).
 
-## ClickHouse: схема таблицы
+## ClickHouse: схема таблиц
 
-Таблица `soib_kcoi_v2.chunks`:
+Таблица чанков (`CLICKHOUSE_DATABASE.CLICKHOUSE_TABLE`, движок `ReplacingMergeTree`,
+ключ сортировки `(source, section, chunk_type, cityHash64(content))`):
 
 | Колонка | Тип | Описание |
 |---------|-----|---------|
-| `chunk_id` | String | UUID чанка |
+| `id` | UUID | Идентификатор строки |
 | `source` | String | Имя файла-источника |
-| `section` | String | Путь раздела (H1 > H2 > H3) |
-| `chunk_type` | String | `""` (текст) или `"table"` |
-| `content` | String | Текст чанка |
-| `line_start` | UInt32 | Начальная строка в исходном файле |
-| `line_end` | UInt32 | Конечная строка |
-| `chunk_index` | UInt32 | Порядковый номер чанка в разделе |
-| `table_headers` | Array(String) | Заголовки таблицы (если chunk_type = "table") |
+| `section` | String | Путь раздела (`Раздел > Подраздел > ...`) |
+| `chunk_type` | LowCardinality(String) | Тип чанка (см. ниже) |
+| `content` | String | Текст чанка; для `table_row` — JSON-массив значений строки |
+| `line_start` | UInt32 | Начало фрагмента: строка файла (.md) или номер блока (.docx) |
+| `line_end` | UInt32 | Конец фрагмента |
+| `chunk_index` | UInt32 | Порядковый номер в пределах (section, chunk_type) |
+| `table_headers` | String | JSON-массив заголовков столбцов (для табличных чанков) |
 | `embedding` | Array(Float32) | Вектор эмбеддинга (1024 dim, bge-m3) |
 
-Сопутствующая таблица `soib_kcoi_v2.chunks_sections` (эмбеддинги НАЗВАНИЙ секций
+Типы чанков (`chunk_type`):
+
+| Значение | Что это |
+|----------|---------|
+| `""` | Фрагмент прозы, обрезанный по `chunk_size` — для точного поиска |
+| `paragraph_full` | Блок прозы целиком — для контекста |
+| `table_row` | Одна строка таблицы: `content` = JSON значений, `table_headers` = JSON заголовков |
+| `table_full` | Таблица целиком текстом |
+| `table_raw` | Таблица, которую не удалось разобрать, — как есть |
+
+Сопутствующая таблица `<database>.<table>_sections` (эмбеддинги НАЗВАНИЙ секций
 для семантического поиска по заголовкам):
 
 | Колонка | Тип | Описание |
@@ -51,11 +62,33 @@ MCP-клиент (Continue.dev, Claude Code, ...)
 
 ## Индексация
 
-Процесс загрузки документов в ClickHouse:
+1. `rag_chat.find_source_files()` рекурсивно обходит `KNOWLEDGE_DIR` и отбирает
+   `.docx` и `.md` (временные файлы Word `~$*.docx` пропускаются)
+2. Сплиттер по формату режет документ на чанки с метаданными:
+   `docx_splitter.py` (python-docx) или `md_splitter.py` (markdown-it-py).
+   Общий контракт чанка — в `chunking.py`, поэтому оба формата ложатся в одну схему
+3. `rag_chat._is_valid_chunk()` отбрасывает мусорные чанки (слишком короткие,
+   без букв), кроме тех, где есть ценные шаблоны: IP, порты, VLAN, коды
+4. `clickhouse_store.py` — вычисляет эмбеддинги (bge-m3 через Ollama) и пишет в БД
+   батчами по 100; при ошибке батча документы вставляются по одному
 
-1. `md_splitter.py` — рекурсивно читает `.md`-файлы из `KNOWLEDGE_DIR`
-2. Разбивает по ATX-заголовкам и таблицам на чанки с метаданными
-3. `clickhouse_store.py` — вычисляет эмбеддинги (bge-m3 через Ollama) и записывает в БД
+### Структура .docx
+
+Уровень заголовка определяется по стилю абзаца в таком порядке:
+
+| Приоритет | Признак | Пример |
+|-----------|---------|--------|
+| 1 | номер в имени стиля | `Заголовок 2`, `Heading 2`, `Приложение: Заголовок 2` |
+| 2 | стиль названия документа | `Название`, `Title` |
+| 3 | слово «заголовок» без номера | `Заголовок: Технический` -> уровень 1 |
+| 4 | `w:outlineLvl` стиля | нестандартные корпоративные стили |
+
+Служебные заголовки (`Содержание`, `Оглавление`, `Перечень таблиц`) закрывают свой
+уровень, но в путь раздела не попадают. Идущие подряд абзацы склеиваются в один
+блок до заголовка, таблицы или лимита `chunk_size`.
+
+Если пакет `.docx` содержит битые связи (например, `Target="NULL"` от удалённой
+картинки), он восстанавливается в памяти — исходный файл не изменяется.
 
 ```powershell
 python rag_chat.py --reindex
@@ -68,22 +101,24 @@ python rag_chat.py --reindex
 python kb_tools.py build-section-index
 ```
 
+Перед эмбеддингом текст нормализуется через `text_utils.normalize_for_embedding()`.
+
 ## Инструменты: справочник по типам поиска
 
 ### Семантический (по смыслу)
 `semantic_search`
 
-Использует cosineDistance по полю `embedding` (поиск по содержимому чанков).
+Использует `cosineDistance` по полю `embedding` (поиск по содержимому чанков).
 
 ### Поиск разделов (многоэтапный)
-`find_relevant_sections`
+`search_section_by_name`
 
 Объединяет четыре сигнала с приоритетом NAME > SEMANTIC > FUZZY > CONTENT:
 
 | Этап | Механизм | Ловит |
 |------|----------|-------|
 | NAME | подстрока по словам (`positionCaseInsensitiveUTF8`) | точное вхождение в названии |
-| SEMANTIC | cosineDistance по `chunks_sections` (эмбеддинги названий) | синонимы («аббревиатуры» → «...сокращений») |
+| SEMANTIC | `cosineDistance` по `chunks_sections` (эмбеддинги названий) | синонимы («аббревиатуры» → «...сокращений») |
 | FUZZY | `ngramDistanceCaseInsensitiveUTF8` по названиям | опечатки («соркащения» → «...сокращений») |
 | CONTENT | подстрока по содержимому (`exact_terms`) | разделы с конкретными терминами |
 
@@ -91,20 +126,51 @@ python kb_tools.py build-section-index
 (`_SECTION_SEMANTIC_MAX_DISTANCE`, `_SECTION_FUZZY_MAX_DISTANCE`).
 
 ### Точный (по подстроке)
-`exact_search`, `exact_search_in_file`, `exact_search_in_file_section`, `multi_term_exact_search`
+`exact_search`, `multi_term_exact_search`
 
 Используют `positionCaseInsensitiveUTF8()` в ClickHouse — корректно работает с кириллицей.
+Опциональные фильтры: `source`, `section`, `chunk_type`.
 
 ### Regex
-`regex_search`, `find_abbreviation_expansion`
+`regex_search`, `search_abbreviation`
 
-Сканируют исходные `.md`-файлы через Python `re`. Зависят от доступности `KNOWLEDGE_DIR`.
+Выполняются в ClickHouse через `match()` / `extractAll()` (синтаксис **RE2**,
+префикс `(?i)` добавляется автоматически). Окружающий текст не возвращается —
+для контекста вызывайте `get_neighbor_chunks` по `source` и `line_number`.
 
-### Навигация
+#### search_abbreviation
+
+По аббревиатуре автоматически строится regex: каждая буква — начало слова с любыми
+последующими буквами, между словами допускаются пробелы и знаки препинания.
+Язык каждой буквы (кириллица/латиница) определяется автоматически, цифры ищутся точно.
+
+| Аббревиатура | Паттерн | Результат |
+|--------------|---------|-----------|
+| `КЦОИ` | `К[а-яё]*\s+Ц[а-яё]*\s+О[а-яё]*\s+И[а-яё]*` | `"Корпоративный Центр Обработки Информации"` |
+| `RAM` | `R[a-z]*\s+A[a-z]*\s+M[a-z]*` | `"Random Access Memory"` |
+| `AK47` | `A[a-z]*\s+K[a-z]*\s+47` | цифры — точное совпадение |
+
+Дубликаты удаляются, результаты сортируются.
+
+```powershell
+python kb_tools.py run search_abbreviation query=КЦОИ
+python kb_tools.py run search_abbreviation query=RAM max_results=20
+```
+
+### Навигация и чтение
 `list_sections`, `list_sources`, `list_all_sections`, `get_section_content`,
 `get_neighbor_chunks`, `get_chunks_by_index`, `read_table`
 
 Читают из ClickHouse по фильтрам (source, section, chunk_index).
+
+## CLI kb_tools.py
+
+```powershell
+python kb_tools.py list                        # список инструментов по группам
+python kb_tools.py help <tool>                 # справка по инструменту и параметрам
+python kb_tools.py run <tool> key=value ...    # вызов инструмента
+python kb_tools.py build-section-index         # пересборка индекса названий разделов
+```
 
 ## Переменные окружения
 
@@ -113,7 +179,7 @@ python kb_tools.py build-section-index
 | `OLLAMA_BASE_URL` | URL Ollama (по умолчанию `http://localhost:11434`) |
 | `OLLAMA_MODEL` | Модель для LLM |
 | `OLLAMA_EMBED_MODEL` | Модель для эмбеддингов (bge-m3) |
-| `KNOWLEDGE_DIR` | Путь к папке с `.md`-файлами |
+| `KNOWLEDGE_DIR` | Путь к папке с исходными документами |
 | `CLICKHOUSE_HOST` | Хост ClickHouse |
 | `CLICKHOUSE_PORT` | Порт ClickHouse (по умолчанию 8123) |
 | `CLICKHOUSE_USERNAME` | Пользователь |
@@ -121,6 +187,10 @@ python kb_tools.py build-section-index
 | `CLICKHOUSE_DATABASE` | База данных |
 | `CLICKHOUSE_TABLE` | Таблица |
 | `RETRIEVER_TOP_K` | Количество результатов семантического поиска |
+| `AGENT_MAX_ITERATIONS` | Максимум раундов вызова инструментов в `rag_agent.py` |
+| `AGENT_MAX_TOOL_CHARS` | Предел символов результата инструмента, отдаваемого LLM |
+| `OLLAMA_TIMEOUT` | Таймаут запроса к Ollama, секунды |
+| `LOG_LEVEL` | Уровень логирования (DEBUG/INFO/WARNING/ERROR) |
 | `MCP_HTTP_HOST` | Хост MCP HTTP сервера (по умолчанию `0.0.0.0`) |
 | `MCP_HTTP_PORT` | Порт MCP HTTP сервера (по умолчанию `8000`) |
 | `MCP_HTTP_DEBUG` | `1`/`true` — DEBUG-логи модулей kb_tools* |

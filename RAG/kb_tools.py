@@ -1,31 +1,27 @@
 """
 LangChain Tools для доступа к базе знаний в ClickHouse.
 
-Централизованный реестр инструментов:
-  ALL_TOOLS                — полный список всех инструментов
-  AGENT_SELECTABLE_TOOLS   — инструменты для автоматического выбора агентом
+Все инструменты читают данные исключительно из ClickHouse — исходные документы
+нужны только на этапе индексации.
 
-Инструменты:
+Инструменты (13):
   semantic_search            — семантический поиск по эмбеддингам
   exact_search               — точный поиск по одной подстроке (positionCaseInsensitive)
-  exact_search_in_source       — точный поиск в конкретном файле
-  exact_search_in_source_section — точный поиск в конкретном разделе файла
   multi_term_exact_search    — точный поиск по списку терминов с ранжированием по покрытию
-  find_sections_by_term      — поиск разделов содержащих термин (возвращает список source+section)
   search_section_by_name     — поиск разделов: название (подстрока) + семантика + опечатки (ngram) + термины
-  regex_search               — regex-поиск по исходным .md файлам с контекстом
-  search_abbreviation — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
+  regex_search               — regex-поиск по содержимому чанков (RE2 в ClickHouse)
+  search_abbreviation        — поиск расшифровки аббревиатур (КЦОИ -> К* Ц* О* И*)
   read_table                 — чтение строк таблицы по разделу
-  get_section_content        — полный текст раздела из исходного .md файла
+  get_section_content        — полный текст раздела (сборка из чанков)
   list_sections              — дерево разделов базы знаний (по файлу или всей KB)
   get_neighbor_chunks        — соседние чанки вокруг якоря по line_start
+  get_chunks_by_index        — чанки по индексам (source, section, chunk_indices)
   list_sources               — список файлов в базе знаний с количеством чанков
   list_all_sections          — уникальные пары (source, last_section_name) для всех разделов
 
 Использование:
-    from kb_tools import create_kb_tools, ALL_TOOLS, AGENT_SELECTABLE_TOOLS
-    tools = create_kb_tools(vectorstore, knowledge_dir)
-    agent = create_tool_calling_agent(llm, tools, prompt)
+    from kb_tools import create_kb_tools, get_tool_registry
+    tools = create_kb_tools(vectorstore)
 """
 
 from __future__ import annotations
@@ -530,7 +526,7 @@ class MultiTermExactSearchInput(BaseModel):
 
 class RegexSearchInput(BaseModel):
     pattern: str = Field(
-        description=r"Regex pattern to search in source .md files. "
+        description=r"RE2 regex pattern to search in chunk content. "
                     r"Examples: r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}' for IPs, "
                     r"r'порт\s*:?\s*\d+' for ports, r'vlan\s*:?\s*\d+' for VLANs."
     )
@@ -1033,13 +1029,14 @@ def create_kb_tools(
     @tool(args_schema=RegexSearchInput)
     def regex_search(pattern: str, max_results: int = regex_max_results) -> RegexSearchResult:
         """
-        Поиск по regex-паттерну напрямую в исходных .md-файлах с выводом окружающих строк контекста.
+        Поиск по regex-паттерну (синтаксис RE2) по содержимому чанков в ClickHouse.
         Лучше всего для: IP-адресов, номеров портов, VLAN ID, кодов документов, масок подсетей,
         любых структурированных паттернов.
-        Каждое совпадение содержит имя файла, номер строки, найденный текст и строки контекста вокруг.
+        Каждое совпадение содержит имя файла, номер начальной строки чанка и найденный текст.
+        Для получения окружающего текста вызови get_neighbor_chunks по source и line_number.
 
         Возвращает:
-            RegexSearchResult: паттерн, список совпадений с контекстом и количество total_matches
+            RegexSearchResult: паттерн, список совпадений и количество total_matches
         """
         logger.debug(f"Tool regex_search: pattern='{pattern}'")
         rec = _db_request("DB:regex_search", f"pattern={pattern!r}\nmax_results={max_results}")

@@ -16,7 +16,7 @@ mindmap
       prometheus (мониторинг)
       3x-ui-exporter
     AI / RAG
-      RAG (MCP knowledge base tools)
+      RAG (агент по docx + MCP-тулы)
       bReader (саммари книг FB2)
       lChain (эксперименты с LangChain)
     Транскрибация
@@ -45,7 +45,7 @@ mindmap
 
 | Проект | Описание |
 | --- | --- |
-| [`RAG/`](RAG/README.md) | Инструменты работы с базой знаний (`.md`-корпус) поверх ClickHouse + bge-m3, 16 инструментов публикуются по MCP (Streamable HTTP и stdio) |
+| [`RAG/`](RAG/README.md) | RAG-агент по локальной документации `.docx`/`.md`: ClickHouse + bge-m3 + LLM в Ollama, всё локально. 13 инструментов базы знаний доступны агенту и внешним клиентам по MCP (Streamable HTTP и stdio) |
 | [`bReader/`](bReader/README.md) | Разбор книг FB2 на секции и генерация саммари через Ollama |
 | `lChain/` | Черновые эксперименты с LangChain (`check_lChain.py`) |
 

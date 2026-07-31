@@ -1,26 +1,23 @@
 """
-RAG-чат по документации СОИБ КЦОИ.
+Базовый RAG-чат и индексация корпуса документации.
 
 Возможности:
-  - Семантический поиск по .md файлам через ClickHouse + Ollama (bge-m3)
-  - Генерация ответов через LLM (qwen3:8b)
-  - Regex-поиск по исходным файлам с контекстом вокруг совпадений
+  - Индексация локального корпуса (.docx и .md) в ClickHouse с эмбеддингами bge-m3
+  - Семантический поиск + генерация ответа через локальную LLM (Ollama)
+
+Для агента с инструментами используйте rag_agent.py, для regex-поиска —
+`python kb_tools.py run regex_search pattern=...` (выполняется в ClickHouse).
 
 Использование:
     python rag_chat.py                          # интерактивный чат
     python rag_chat.py "что такое КЦОИ"         # одиночный вопрос
     python rag_chat.py --reindex                # принудительная переиндексация
-    python rag_chat.py --regex "\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"  # regex-поиск
 
 Переменные окружения (.env):
     OLLAMA_BASE_URL        — адрес Ollama (по умолчанию http://localhost:11434)
-    OLLAMA_MODEL           — LLM-модель (по умолчанию qwen3:8b)
-    OLLAMA_FINAL_MODEL     — более мощная модель для финального ответа
-                             (по умолчанию hf.co/hesamation/Qwen3.6-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M)
-                             # Было: qwen2.5:14b
+    OLLAMA_MODEL           — LLM-модель (по умолчанию qwen3.5:9b)
     OLLAMA_EMBED_MODEL     — модель эмбеддингов (по умолчанию bge-m3)
-    KNOWLEDGE_DIR          — папка с .md файлами источников знаний
-    PROMPTS_DIR            — папка с промптами относительно RAG/ (по умолчанию prompts, можно prompts_v2)
+    KNOWLEDGE_DIR          — папка с исходными документами (.docx, .md)
     CLICKHOUSE_HOST        — хост ClickHouse (по умолчанию localhost)
     CLICKHOUSE_PORT        — порт ClickHouse HTTP (по умолчанию 8123)
     CLICKHOUSE_USERNAME    — пользователь (по умолчанию clickhouse)
@@ -43,10 +40,6 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-try:
-    import chromadb  # noqa: F401 — kept for potential direct use by external scripts
-except ImportError:
-    pass
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
@@ -76,12 +69,9 @@ logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:8b"
-    # ollama_final_model: str = "qwen2.5:14b"  # Более мощная модель для финального ответа
-    ollama_final_model: str = "hf.co/hesamation/Qwen3.6-35B-A3B-Claude-4.6-Opus-Reasoning-Distilled-GGUF:Q4_K_M"  # Claude-distilled модель для финального ответа
+    ollama_model: str = "qwen3.5:9b"
     ollama_embed_model: str = "bge-m3"
     knowledge_dir: str = r"Z:\ES-Leasing\СОИБ КЦОИ"
-    prompts_dir: str = "prompts.bak"  # Папка с промптами относительно RAG/ (по умолчанию 'prompts', можно 'prompts_v2')
     # ClickHouse connection
     clickhouse_host:     str = "localhost"
     clickhouse_port:     int = 8123
@@ -94,27 +84,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 300
     # Retrieval
     retriever_top_k: int = 10
-    retriever_score_threshold: float = 0.0
-    max_context_chars: int = 100_000
-    regex_context_lines: int = 5
-    memory_max_turns: int = 5
-    reranker_top_n: int = 15          # top-N anchors kept after LLM reranking (step 2.5)
-    hyde_enabled: bool = True
-    llm_log_enabled: bool = True           # write LLM prompts/responses to logs/_rag_*.log
     log_level: str = "DEBUG"               # logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-    # Cross-session memory (ClickHouse table in the same database)
-    agent_memory_table:          str   = "agent_memory"
-    agent_memory_enabled:        bool  = True
-    agent_memory_min_score:      int   = 4    # save only if completeness score >= this
-    agent_memory_min_tool_calls: int   = 2    # save only if non-trivial (tool calls >= this)
-    agent_memory_recall_sim:     float = 0.80 # min cosine similarity to inject hint
-    agent_memory_dedup_sim:      float = 0.92 # skip saving if duplicate exists above this
-    # Neighbor-chunk enrichment (step 3)
-    # Preceding context is fetched up to enrich_before_chars (≈2× larger than after).
-    # A large number of candidate chunks is fetched from ClickHouse; Python trims by chars.
-    enrich_before_chars: int = 3000        # max chars of preceding context per anchor
-    enrich_after_chars: int = 1500         # max chars of following context per anchor
-    enrich_candidates: int = 30            # max ClickHouse rows to fetch per direction
+    # Agent (rag_agent.py)
+    agent_max_iterations: int = 6          # max tool-calling rounds before forcing an answer
+    agent_max_tool_chars: int = 12_000     # per-tool-result cap fed back to the LLM
+    ollama_timeout: float = 300.0          # seconds, per LLM request
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -126,48 +100,62 @@ settings = Settings()
 # DTO
 # ---------------------------------------------------------------------------
 
-class RegexMatch(BaseModel):
-    file: str
-    line_number: int
-    match: str
-    context: str
-
-
 class RagAnswer(BaseModel):
     question: str
     answer: str
     source_files: list[str]
 
 
-class RegexSearchResult(BaseModel):
-    pattern: str
-    total_matches: int
-    matches: list[RegexMatch]
-
-
 # ---------------------------------------------------------------------------
-# Чанкинг документов — делегировано в md_splitter (markdown-it-py)
+# Чанкинг документов — делегировано в сплиттеры по формату
 # ---------------------------------------------------------------------------
 
-from md_splitter import split_md_file  # noqa: E402  (after sys.stdout patch)
+from md_splitter import split_md_file      # noqa: E402  (after sys.stdout patch)
+from docx_splitter import split_docx_file  # noqa: E402
+
+# Расширение файла -> функция разбиения на чанки
+_SPLITTERS = {
+    ".docx": split_docx_file,
+    ".md":   split_md_file,
+}
+
+
+def find_source_files(knowledge_dir: Path) -> list[Path]:
+    """Возвращает поддерживаемые документы из папки знаний (рекурсивно).
+
+    Временные файлы Word (`~$имя.docx`) и скрытые файлы пропускаются.
+    """
+    files = [
+        path for path in sorted(knowledge_dir.glob("**/*"))
+        if path.is_file()
+        and path.suffix.lower() in _SPLITTERS
+        and not path.name.startswith(("~$", "."))
+    ]
+    return files
 
 
 def load_and_split_all(knowledge_dir: Path) -> list[Document]:
-    """Загружает и разбивает все .md файлы из папки знаний."""
-    md_files = sorted(knowledge_dir.glob("**/*.md"))
-    logger.info(f"Найдено .md файлов: {len(md_files)}")
+    """Загружает и разбивает на чанки все поддерживаемые документы папки знаний."""
+    source_files = find_source_files(knowledge_dir)
+    by_type: dict[str, int] = {}
+    for path in source_files:
+        by_type[path.suffix.lower()] = by_type.get(path.suffix.lower(), 0) + 1
+    logger.info(
+        f"Найдено документов: {len(source_files)} "
+        f"({', '.join(f'{ext}: {cnt}' for ext, cnt in sorted(by_type.items())) or 'нет'})"
+    )
 
     all_chunks: list[Document] = []
-    for md_file in md_files:
+    for path in source_files:
+        split_file = _SPLITTERS[path.suffix.lower()]
         try:
-            chunks = split_md_file(
-                md_file,
+            all_chunks.extend(split_file(
+                path,
                 chunk_size=settings.chunk_size,
                 chunk_overlap=settings.chunk_overlap,
-            )
-            all_chunks.extend(chunks)
+            ))
         except Exception as exc:
-            logger.warning(f"Ошибка загрузки {md_file.name}: {exc}")
+            logger.warning(f"Ошибка загрузки {path.name}: {exc}")
 
     logger.info(f"Итого чанков для индексации: {len(all_chunks)}")
     return all_chunks
@@ -177,7 +165,7 @@ def load_and_split_all(knowledge_dir: Path) -> list[Document]:
 # Векторное хранилище (ClickHouse)
 # ---------------------------------------------------------------------------
 
-from clickhouse_store import ClickHouseVectorStore, ClickHouseStoreSettings, build_store
+from clickhouse_store import ClickHouseVectorStore, ClickHouseStoreSettings
 
 
 def _make_embeddings() -> OllamaEmbeddings:
@@ -304,50 +292,11 @@ def build_vectorstore(force_reindex: bool = False) -> ClickHouseVectorStore:
 
 
 # ---------------------------------------------------------------------------
-# Regex-поиск
-# ---------------------------------------------------------------------------
-
-def regex_search(pattern: str, knowledge_dir: Path) -> RegexSearchResult:
-    """Ищет совпадения с regex-паттерном в исходных .md файлах."""
-    ctx = settings.regex_context_lines
-    try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
-        logger.error(f"Некорректный regex-паттерн '{pattern}': {exc}")
-        return RegexSearchResult(pattern=pattern, total_matches=0, matches=[])
-
-    matches: list[RegexMatch] = []
-    for md_file in sorted(knowledge_dir.glob("**/*.md")):
-        try:
-            lines = md_file.read_text(encoding="utf-8", errors="replace").splitlines()
-        except Exception as exc:
-            logger.warning(f"Ошибка чтения {md_file.name}: {exc}")
-            continue
-        for i, line in enumerate(lines):
-            for m in compiled.finditer(line):
-                ctx_start = max(0, i - ctx)
-                ctx_end = min(len(lines), i + ctx + 1)
-                context_block = "\n".join(
-                    f"{'>>>' if j == i else '   '} {lines[j]}"
-                    for j in range(ctx_start, ctx_end)
-                )
-                matches.append(RegexMatch(
-                    file=md_file.name,
-                    line_number=i + 1,
-                    match=m.group(0),
-                    context=context_block,
-                ))
-
-    logger.info(f"Regex '{pattern}': найдено {len(matches)} совпадений")
-    return RegexSearchResult(pattern=pattern, total_matches=len(matches), matches=matches)
-
-
-# ---------------------------------------------------------------------------
 # RAG-цепочка
 # ---------------------------------------------------------------------------
 
 PROMPT_TEMPLATE = """\
-Ты — эксперт-аналитик по документации системы СОИБ КЦОИ Банка России.
+Ты — эксперт-аналитик по локальной документации.
 
 Правила:
 1. Используй ТОЛЬКО информацию из предоставленного контекста.
@@ -427,45 +376,15 @@ def print_rag_answer(rag: RagAnswer) -> None:
     print(SEP)
 
 
-def print_regex_result(result: RegexSearchResult, max_show: int = 100) -> None:
-    print(f"\n{SEP}")
-    print(f"Regex: {result.pattern}")
-    print(f"Всего совпадений: {result.total_matches}")
-    print(SEP)
-    for m in result.matches[:max_show]:
-        print(f"\n[{m.file}] строка {m.line_number}: {m.match}")
-        print(m.context)
-        print("-" * 40)
-    if result.total_matches > max_show:
-        print(f"\n... и ещё {result.total_matches - max_show} совпадений.")
-    print(SEP)
-
-
 # ---------------------------------------------------------------------------
 # Интерактивный чат
 # ---------------------------------------------------------------------------
 
-def _parse_regex_query(text: str) -> Optional[str]:
-    """
-    Если пользователь ввёл /pattern/ или 'regex: pattern' — возвращает паттерн.
-    Иначе None.
-    """
-    m = re.match(r"^\s*/(.+)/\s*$", text)
-    if m:
-        return m.group(1)
-    m = re.match(r"^\s*regex?:\s*(.+)$", text, re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    return None
-
-
-def run_interactive_chat(vectorstore: ClickHouseVectorStore, llm: ChatOllama, knowledge_dir: Path) -> None:
-    """Интерактивный чат в консоли с поддержкой regex-запросов."""
+def run_interactive_chat(vectorstore: ClickHouseVectorStore, llm: ChatOllama) -> None:
+    """Интерактивный чат в консоли."""
     print(f"\n{SEP}")
-    print("RAG-чат по документации СОИБ КЦОИ")
-    print("  Обычный вопрос     → семантический поиск + ответ LLM")
-    print("  /паттерн/          → regex-поиск по файлам")
-    print("  regex: паттерн     → regex-поиск по файлам")
+    print("RAG-чат по локальной документации")
+    print("  Обычный вопрос      → семантический поиск + ответ LLM")
     print("  exit / quit / выход → выйти")
     print(f"{SEP}\n")
 
@@ -482,13 +401,7 @@ def run_interactive_chat(vectorstore: ClickHouseVectorStore, llm: ChatOllama, kn
             print("До свидания!")
             break
 
-        regex_pattern = _parse_regex_query(question)
-        if regex_pattern:
-            result = regex_search(regex_pattern, knowledge_dir)
-            print_regex_result(result)
-        else:
-            rag = ask_question(vectorstore, llm, question)
-            print_rag_answer(rag)
+        print_rag_answer(ask_question(vectorstore, llm, question))
 
 
 # ---------------------------------------------------------------------------
@@ -496,10 +409,9 @@ def run_interactive_chat(vectorstore: ClickHouseVectorStore, llm: ChatOllama, kn
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="RAG-чат по документации СОИБ КЦОИ")
+    parser = argparse.ArgumentParser(description="RAG-чат по локальной документации (.docx, .md)")
     parser.add_argument("question", nargs="*", help="Вопрос (если не указан — интерактивный режим)")
     parser.add_argument("--reindex", action="store_true", help="Принудительно переиндексировать документы")
-    parser.add_argument("--regex", metavar="PATTERN", help="Regex-поиск по исходным файлам (без LLM)")
     return parser.parse_args()
 
 
@@ -518,17 +430,9 @@ def main() -> None:
         f"→ {settings.clickhouse_database}.{settings.clickhouse_table}"
     )
 
-    knowledge_dir = Path(settings.knowledge_dir)
-
-    # Режим regex-поиска не требует LLM/vectorstore
-    if args.regex:
-        result = regex_search(args.regex, knowledge_dir)
-        print_regex_result(result)
-        return
-
     if args.reindex:
         confirm = input(
-            f"\n⚠️  Переиндексация удалит таблицу '{settings.clickhouse_database}.{settings.clickhouse_table}'!\n"
+            f"\nВНИМАНИЕ: переиндексация удалит таблицу '{settings.clickhouse_database}.{settings.clickhouse_table}'!\n"
             f"   Введите 'reindex' для подтверждения: "
         ).strip()
         if confirm != "reindex":
@@ -539,16 +443,9 @@ def main() -> None:
     llm = build_llm()
 
     if args.question:
-        question = " ".join(args.question)
-        regex_pattern = _parse_regex_query(question)
-        if regex_pattern:
-            result = regex_search(regex_pattern, knowledge_dir)
-            print_regex_result(result)
-        else:
-            rag = ask_question(vectorstore, llm, question)
-            print_rag_answer(rag)
+        print_rag_answer(ask_question(vectorstore, llm, " ".join(args.question)))
     else:
-        run_interactive_chat(vectorstore, llm, knowledge_dir)
+        run_interactive_chat(vectorstore, llm)
 
 
 if __name__ == "__main__":

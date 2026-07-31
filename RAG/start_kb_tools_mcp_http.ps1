@@ -26,11 +26,11 @@ if (-not $venvActivate) {
 Write-Host "Активация venv: $venvActivate" -ForegroundColor Yellow
 . $venvActivate
 
-# Проверка пакета mcp; при отсутствии — установка зависимостей MCP.
+# Проверка пакета mcp; при отсутствии — установка зависимостей проекта.
 $mcpInstalled = python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('mcp') else 1)" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Пакет mcp не найден. Установка requirements_mcp.txt..." -ForegroundColor Yellow
-    pip install -r requirements_mcp.txt
+    Write-Host "Пакет mcp не найден. Установка requirements.txt..." -ForegroundColor Yellow
+    pip install -r requirements.txt
 }
 
 if (-not (Test-Path ".env")) {
