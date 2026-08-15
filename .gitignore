@@ -53,3 +53,5 @@ frigate/mosquitto/data/**
 frigate/metabase-data/**
 .playwright-mcp/**
 py
+
+frigate/mosquitto/data/mosquitto.db
