@@ -1,0 +1,13 @@
+# torch/torchaudio: индекс cu126 подобран под драйвер этой машины (RTX 4060 Ti,
+# CUDA UMD 13.3 — обратная совместимость с cu126) по опыту rgzz/kshlt на этом же компьютере.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch>=2.6.0
+torchaudio>=2.6.0
+transformers==4.57.1
+sentencepiece
+pyannote.audio
+omegaconf
+hydra-core
+python-dotenv
+pydantic
+rich-argparse
