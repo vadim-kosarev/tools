@@ -31,6 +31,16 @@ class VideoTranscriptResult(BaseModel):
     segments: list[SegmentTranscript] = Field(default_factory=list, description="Сегменты речи")
 
 
+class PhraseMatch(BaseModel):
+    """Найденное вхождение фразы в распознанном сегменте."""
+
+    video_path: Path = Field(description="Путь к исходному видео")
+    phrase: str = Field(description="Искомая фраза")
+    start_sec: float = Field(description="Начало сегмента в секундах")
+    end_sec: float = Field(description="Конец сегмента в секундах")
+    text: str = Field(description="Полный текст сегмента, где нашлась фраза")
+
+
 class ScanReport(BaseModel):
     """Итоговая статистика прохода по папкам."""
 

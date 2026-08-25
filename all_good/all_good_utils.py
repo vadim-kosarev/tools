@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
+import tempfile
 import time
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
@@ -151,3 +153,133 @@ def finalize_segments_file(partial_path: Path, video_path: Path, revision: str) 
     except OSError:
         pass
     return output_path
+
+
+_SEGMENT_LINE_RE = re.compile(
+    r"^\[(\d{2}):(\d{2}):(\d{2})\.(\d{3}) - (\d{2}):(\d{2}):(\d{2})\.(\d{3})\]\s*(.*)$"
+)
+
+
+def _hhmmssms_to_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000
+
+
+def collect_segments_files(inputs: list[str], recursive: bool) -> list[Path]:
+    """Собирает список файлов *.gigaam-*.segments.txt (результаты прохода 1)."""
+    result: list[Path] = []
+    for raw in inputs:
+        path = Path(raw).expanduser().resolve()
+        if path.is_dir():
+            pattern = "**/*.gigaam-*.segments.txt" if recursive else "*.gigaam-*.segments.txt"
+            result.extend(path.glob(pattern))
+        elif path.is_file() and path.name.endswith(".segments.txt"):
+            result.append(path)
+    return sorted(set(result))
+
+
+def parse_segments_file(path: Path) -> list[SegmentTranscript]:
+    """Разбирает файл с сегментами речи в список SegmentTranscript."""
+    segments = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = _SEGMENT_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2, text = match.groups()
+        segments.append(SegmentTranscript(
+            start_sec=_hhmmssms_to_seconds(h1, m1, s1, ms1),
+            end_sec=_hhmmssms_to_seconds(h2, m2, s2, ms2),
+            text=text,
+        ))
+    return segments
+
+
+def find_source_video(segments_path: Path) -> Path | None:
+    """Находит исходный видеофайл рядом с файлом сегментов по общему имени-основе."""
+    idx = segments_path.name.find(".gigaam-")
+    if idx == -1:
+        return None
+    stem = segments_path.name[:idx]
+    for ext in VIDEO_EXTENSIONS:
+        candidate = segments_path.with_name(stem + ext)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def normalize_for_match(text: str) -> str:
+    """Нормализует текст для поиска фразы: нижний регистр, без пунктуации, один пробел."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def estimate_phrase_start_fraction(text: str, phrase: str) -> float:
+    """Оценивает относительную позицию начала фразы внутри текста сегмента (0..1) по числу символов."""
+    norm_text = normalize_for_match(text)
+    norm_phrase = normalize_for_match(phrase)
+    if not norm_text:
+        return 0.0
+    idx = norm_text.find(norm_phrase)
+    if idx == -1:
+        return 0.0
+    return idx / len(norm_text)
+
+
+def is_edge_match(text: str, phrase: str) -> bool:
+    """True, если фраза стоит в начале или в конце текста сегмента (не в середине)."""
+    norm_text = normalize_for_match(text)
+    norm_phrase = normalize_for_match(phrase)
+    return norm_text.startswith(norm_phrase) or norm_text.endswith(norm_phrase)
+
+
+def safe_filename(phrase: str) -> str:
+    """Превращает фразу в безопасное имя файла/папки."""
+    normalized = normalize_for_match(phrase).replace(" ", "_")
+    return normalized or "phrase"
+
+
+_SILENCE_START_RE = re.compile(r"silence_start:\s*([\d.]+)")
+_SILENCE_END_RE = re.compile(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)")
+
+
+def trim_leading_silence(
+        video_path: Path, start_sec: float, max_probe_sec: float,
+        noise_db: float, min_silence_sec: float) -> float:
+    """Сдвигает start_sec вперёд, если сразу за ним идёт тишина: VAD-сегмент иногда захватывает
+    соседний беззвучный/невнятный спан, для которого ASR не выдал текста. Если тишины нет —
+    возвращает start_sec без изменений."""
+    if max_probe_sec <= 0:
+        return start_sec
+    tmp_dir = Path(tempfile.mkdtemp(prefix="all_good_probe_"))
+    probe_path = tmp_dir / "probe.wav"
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{start_sec:.3f}", "-i", str(video_path),
+            "-t", f"{max_probe_sec:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+            "-acodec", "pcm_s16le", str(probe_path),
+        ]
+        subprocess.run(cmd, capture_output=True)
+        if not probe_path.exists() or probe_path.stat().st_size == 0:
+            return start_sec
+
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(probe_path), "-af", f"silencedetect=noise={noise_db}dB:d=0.1", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        start_match = _SILENCE_START_RE.search(result.stderr)
+        if not start_match or float(start_match.group(1)) > 0.05:
+            return start_sec
+        end_match = _SILENCE_END_RE.search(result.stderr)
+        if not end_match:
+            return start_sec
+        silence_duration = float(end_match.group(2))
+        if silence_duration < min_silence_sec:
+            return start_sec
+        return start_sec + silence_duration
+    finally:
+        cleanup_temp_file(probe_path)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass

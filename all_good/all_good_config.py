@@ -57,6 +57,18 @@ SCAN_TRANSCRIBE_DEVICE = os.environ.get("scan_transcribe.config.device", "auto")
 SCAN_TRANSCRIBE_MAX_SEGMENT_SEC = float(os.environ.get("scan_transcribe.config.max-segment-sec", "12.0"))
 SCAN_TRANSCRIBE_MIN_SEGMENT_SEC = float(os.environ.get("scan_transcribe.config.min-segment-sec", "3.0"))
 
+# cut_phrases.config.* — значения по умолчанию для CLI-флагов cut_phrases.py
+CUT_PHRASES_OUTPUT_DIR = os.environ.get(
+    "cut_phrases.config.output-dir", str(Path(__file__).parent / "cuts")
+)
+CUT_PHRASES_PADDING_MS = int(os.environ.get("cut_phrases.config.padding-ms", "300"))
+
+# Подрезка ведущей тишины: сегменты VAD иногда начинаются на 0.3-2 сек раньше реальной речи
+# (склейка с соседним тихим/невнятным спаном без текста в ASR) — обрезаем её перед вырезкой клипа.
+SILENCE_TRIM_NOISE_DB = float(os.environ.get("cut_phrases.config.silence-noise-db", "-30"))
+SILENCE_TRIM_MIN_SEC = float(os.environ.get("cut_phrases.config.silence-min-sec", "0.3"))
+SILENCE_TRIM_PROBE_SEC = float(os.environ.get("cut_phrases.config.silence-probe-sec", "2.0"))
+
 # ============================================================================
 # Файлы
 # ============================================================================
