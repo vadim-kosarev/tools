@@ -222,7 +222,15 @@ def _open_frigate_db() -> sqlite3.Connection:
     return conn
 
 
-def _fetch_batch(conn: sqlite3.Connection, after: float, limit: int) -> list[tuple]:
+def _fetch_batch(conn: sqlite3.Connection, after: float, limit: int) -> tuple[list[tuple], int, float]:
+    """Returns (rows_with_embeddings, events_scanned, max_start_time_scanned).
+
+    Note: tried splitting this into a cheap ordered `event` scan + a `WHERE id IN (...)`
+    point-lookup into vec_thumbnails, expecting it to be faster than the combined join below -
+    measured *slower* (~22 rows/s vs ~150 rows/s here), so keeping the join. The single-query
+    plan apparently lets SQLite drive the scan from vec_thumbnails directly instead of doing N
+    separate point lookups, which are surprisingly expensive against this vec0 table.
+    """
     cur = conn.cursor()
     cur.execute(
         """
@@ -236,7 +244,24 @@ def _fetch_batch(conn: sqlite3.Connection, after: float, limit: int) -> list[tup
         """,
         (after, limit),
     )
-    return cur.fetchall()
+    rows = cur.fetchall()
+    if not rows:
+        return [], 0, after
+    max_start = rows[-1][3]
+    return rows, len(rows), max_start
+
+
+def _count_pending(conn: sqlite3.Connection, after: float) -> int:
+    """Cheap approximate count of events newer than the watermark.
+
+    Deliberately NOT joined against vec_thumbnails (a vec0 virtual table) - that join is very
+    slow (>60s, vs. ~0.1s for the plain event-table scan) and would stall progress reporting
+    itself. A handful of events without an embedding yet aren't counted precisely, fine for a
+    progress indicator.
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM event WHERE start_time > ?", (after,))
+    return cur.fetchone()[0]
 
 
 def _sync_once() -> int:
@@ -245,12 +270,15 @@ def _sync_once() -> int:
     conn = _open_frigate_db()
     total = 0
     try:
+        pending = _count_pending(conn, watermark)
+        if pending:
+            logger.info("sync: %d event(s) pending", pending)
         while True:
-            batch = _fetch_batch(conn, watermark, SYNC_BATCH_SIZE)
-            if not batch:
+            t0 = time.monotonic()
+            batch, scanned, max_start = _fetch_batch(conn, watermark, SYNC_BATCH_SIZE)
+            if scanned == 0:
                 break
             pg_rows = []
-            max_start = watermark
             for eid, camera, label, start_time, end_time, has_clip, has_snapshot, blob in batch:
                 if not blob or len(blob) != EMBED_DIM * 4:
                     continue
@@ -259,11 +287,17 @@ def _sync_once() -> int:
                     eid, camera, label, start_time, end_time,
                     bool(has_clip), bool(has_snapshot), _vec_literal(vec),
                 ))
-                max_start = max(max_start, start_time)
             watermark = max_start
             _upsert_batch(pg_rows, watermark)
             total += len(pg_rows)
-            if len(batch) < SYNC_BATCH_SIZE:
+            elapsed = time.monotonic() - t0
+            rate = len(pg_rows) / elapsed if elapsed > 0 else 0.0
+            pct = 100.0 * total / pending if pending else 100.0
+            logger.info(
+                "sync batch: +%d rows (scanned %d) in %.1fs (%.0f/s) | %d/%d this cycle (%.0f%%)",
+                len(pg_rows), scanned, elapsed, rate, total, pending, pct,
+            )
+            if scanned < SYNC_BATCH_SIZE:
                 break
     finally:
         conn.close()
