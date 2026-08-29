@@ -159,6 +159,7 @@ services:
       POSTGRES_PASSWORD: rgzz
       FRIGATE_DB_PATH: /frigate-config/frigate.db
       SYNC_INTERVAL_SEC: 60
+      SYNC_BATCH_SIZE: 1000
     volumes:
       - ./config:/frigate-config:ro
       - ./video-search/model_cache:/root/.cache/huggingface

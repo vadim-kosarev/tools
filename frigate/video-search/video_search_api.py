@@ -77,7 +77,7 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "rgzz")
 FRIGATE_DB_PATH = os.getenv("FRIGATE_DB_PATH", "/frigate-config/frigate.db")
 FRIGATE_INTERNAL_URL = os.getenv("FRIGATE_INTERNAL_URL", "http://frigate:5000")
 SYNC_INTERVAL_SEC = int(os.getenv("SYNC_INTERVAL_SEC", "60"))
-SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "5000"))
+SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "1000"))
 
 EMBED_MODEL_NAME = "jinaai/jina-clip-v2"
 EMBED_DIM = 768
