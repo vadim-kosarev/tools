@@ -29,9 +29,16 @@ video-search API (FastAPI) ──text-tower(jina-clip-v2)──> encode query �
 - **Поиск**: эмбеддинг запроса считается через `transformers` (`jinaai/jina-clip-v2`,
   `trust_remote_code=True`, CPU) — только текстовая башня, без vision. Cosine-поиск —
   `pgvector` (`<=>`, HNSW индекс).
-- **UI**: одна страница, поле ввода + сетка результатов. Thumbnail/клип грузятся прямо из
-  браузера с `http://<host>:5000/api/events/{id}/...` (тот же Frigate, той же cookie-сессией —
-  backend-прокси не нужен).
+- **UI**: одна страница, поле ввода + сетка результатов.
+  - Thumbnail — через `GET /api/proxy/thumbnail/{id}`: backend ходит к Frigate по внутренней
+    docker-сети (`frigate:5000`, без auth) и отдаёт байты сам. Нужно, потому что Frigate снаружи
+    доступен только через `vkosarev.name:5001` с basic auth, а `<img>` не может передать креды
+    для встроенного ресурса — без прокси превьюшки просто не грузились бы через интернет.
+  - Клип — прямая ссылка на сам Frigate (`http://<host>:5000/...` локально /
+    `https://vkosarev.name:5001/...` через frpc, см. `FRIGATE_HOSTS` в HTML): это top-level
+    переход по ссылке (`target=_blank`), браузер нормально спросит basic auth и закэширует —
+    в отличие от `<img>`. Через backend не проксируется специально: видео бывает 100+ МБ, гонять
+    его вдвойне через video-search незачем.
 
 ## DB
 

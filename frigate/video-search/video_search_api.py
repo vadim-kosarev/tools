@@ -51,7 +51,7 @@ import sqlite_vec
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 _SCRIPT_DIR = Path(__file__).parent
 _env_file = _args.env or str(_SCRIPT_DIR / ".env")
@@ -374,27 +374,6 @@ async def proxy_thumbnail(event_id: str) -> Response:
     return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
 
 
-@app.get("/api/proxy/clip/{event_id}")
-async def proxy_clip(event_id: str) -> StreamingResponse:
-    """Stream Frigate's event clip via the internal docker network (see proxy_thumbnail)."""
-    client = _get_http_client()
-    req = client.build_request("GET", f"{FRIGATE_INTERNAL_URL}/api/events/{event_id}/clip.mp4")
-    resp = await client.send(req, stream=True)
-
-    async def _body():
-        try:
-            async for chunk in resp.aiter_bytes():
-                yield chunk
-        finally:
-            await resp.aclose()
-
-    return StreamingResponse(
-        _body(),
-        status_code=resp.status_code,
-        media_type=resp.headers.get("content-type", "video/mp4"),
-    )
-
-
 CANDIDATE_POOL_SIZE = int(os.getenv("CANDIDATE_POOL_SIZE", "500"))
 
 _SORT_EXPR = {
@@ -552,13 +531,26 @@ let lastEmbedMs = 0;
 q.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 sortSel.addEventListener('change', () => { if (q.value.trim()) doSearch(); });
 
+// Клип — прямая ссылка на сам Frigate (не через наш backend): это top-level переход по
+// ссылке (target=_blank), basic-auth на удалённом Frigate браузер спросит нормально и
+// закэширует, а видео (бывает 100+ МБ) не гоняется вдвойне через video-search.
+// Thumbnail так не может — <img> не показывает диалог basic-auth для встроенных
+// ресурсов, поэтому она всегда идёт через наш /api/proxy/thumbnail (см. cardHtml).
+const FRIGATE_HOSTS = {
+    'vkosarev.name': 'https://vkosarev.name:5001',
+};
+
+function frigateBase() {
+    return FRIGATE_HOSTS[location.hostname] || `${location.protocol}//${location.hostname}:5000`;
+}
+
 function fmtTime(ts) {
     return new Date(ts * 1000).toLocaleString('ru-RU');
 }
 
 function cardHtml(r) {
     return `
-        <a class="card" href="/api/proxy/clip/${r.id}" target="_blank">
+        <a class="card" href="${frigateBase()}/api/events/${r.id}/clip.mp4" target="_blank">
             <img class="thumb" src="/api/proxy/thumbnail/${r.id}" loading="lazy">
             <div class="info">
                 <div class="label">${r.label}</div>
