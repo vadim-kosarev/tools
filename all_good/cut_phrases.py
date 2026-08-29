@@ -61,6 +61,20 @@ def _build_parser() -> argparse.ArgumentParser:
                 "реально изолированные тишиной (--isolate-silence), затем — чем короче итоговый "
                 "клип, тем выше. Включает --isolate-silence автоматически"),
     )
+    parser.add_argument(
+        "--max-phrase-streak", type=int, default=0,
+        help=_d(0, "При нескольких фразах-аргументах — не давать одной и той же фразе идти подряд "
+                "больше этого числа раз в итоговой склейке, перемежая с другими (не строго — если "
+                "какой-то фразы намного больше остальных, ей всё равно придётся повторяться). "
+                "0 — без ограничения"),
+    )
+    parser.add_argument(
+        "--min-phrase-streak", type=int, default=0,
+        help=_d(0, "При нескольких фразах-аргументах — наоборот, не переключаться на другую фразу, "
+                "пока текущая не повторится подряд хотя бы столько раз (группами, а не вперемешку). "
+                "0 — не используется. Если задан вместе с --max-phrase-streak, должен быть не больше "
+                "него"),
+    )
     parser.add_argument("--no-recursive", dest="recursive", action="store_false",
                         help=_d(True, "Не заходить в подпапки (по умолчанию — заходит рекурсивно)"))
     parser.add_argument("--debug", action="store_true", help=_d(False, "DEBUG-уровень логирования"))
@@ -77,12 +91,15 @@ if __name__ == "__main__":
         sys.exit(0)
     if not _args.folders:
         _parser.error("нужно указать --folders с папками, где лежат *.segments.txt и видео")
+    if _args.max_phrase_streak > 0 and _args.min_phrase_streak > _args.max_phrase_streak:
+        _parser.error("--min-phrase-streak не может быть больше --max-phrase-streak")
 
 # ============================================================================
 # Тяжёлые импорты — только если есть что обрабатывать
 # ============================================================================
 
 import subprocess
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import NamedTuple
 
@@ -238,25 +255,86 @@ def resolve_all(matches: list[PhraseMatch], isolate_silence: bool) -> list[Resol
 
 
 def select_best_of(resolved: list[ResolvedCut], target_sec: float, padding_sec: float) -> list[ResolvedCut]:
-    """Жадно берёт совпадения с лучшей оценкой (изолированные, затем короче — лучше), пока не
-    наберётся ~target_sec суммарной длительности (включает клип, который пересекает порог, —
-    поэтому 'около', не строго). Итог — в хронологическом порядке для финальной сборки."""
+    """Берёт совпадения с лучшей оценкой (изолированные, затем короче — лучше), пока не наберётся
+    ~target_sec суммарной длительности (включает клип, который пересекает порог, — поэтому
+    'около', не строго). При нескольких фразах отбирает по кругу — по одному лучшему совпадению от
+    каждой фразы за раз, — а не общим списком: иначе фраза с более короткими/изолированными
+    совпадениями почти целиком вытесняет остальные из бюджета, и делить остаток между фразами
+    (см. --max-phrase-streak) становится нечем. Итог — в хронологическом порядке для сборки."""
     def clip_duration(rc: ResolvedCut) -> float:
         return (rc.cut_end - rc.cut_start) + 2 * padding_sec
 
     def score(rc: ResolvedCut) -> float:
         return (100.0 if rc.isolated else 0.0) - clip_duration(rc)
 
-    ranked = sorted(resolved, key=score, reverse=True)
+    groups: dict[str, list[ResolvedCut]] = defaultdict(list)
+    for rc in resolved:
+        groups[rc.match.phrase].append(rc)
+    for phrase_group in groups.values():
+        phrase_group.sort(key=score, reverse=True)
+
+    phrases = list(groups.keys())
+    next_index = {phrase: 0 for phrase in phrases}
     selected: list[ResolvedCut] = []
     total = 0.0
-    for rc in ranked:
-        if total >= target_sec:
-            break
-        selected.append(rc)
-        total += clip_duration(rc)
+    while total < target_sec:
+        picked_any = False
+        for phrase in phrases:
+            if total >= target_sec:
+                break
+            i = next_index[phrase]
+            if i >= len(groups[phrase]):
+                continue
+            rc = groups[phrase][i]
+            next_index[phrase] = i + 1
+            selected.append(rc)
+            total += clip_duration(rc)
+            picked_any = True
+        if not picked_any:
+            break  # совпадения по всем фразам закончились раньше цели
+
     selected.sort(key=lambda rc: (str(rc.match.video_path), rc.match.start_sec))
     return selected
+
+
+def arrange_phrase_streaks(resolved: list[ResolvedCut], min_streak: int, max_streak: int) -> list[ResolvedCut]:
+    """Переставляет порядок совпадений с учётом двух порогов подряд идущих повторов одной фразы:
+    max_streak — не больше стольки раз подряд (перемежает с другими), min_streak — наоборот, не
+    переключаться на другую фразу, пока текущая не повторится хотя бы столько раз (группами).
+    0 — порог не используется. Внутри каждой фразы сохраняет исходный (хронологический) порядок.
+    Не строго: если фразы сильно неравны по числу совпадений, точно выдержать пороги до самого
+    конца может не получиться."""
+    if min_streak <= 0 and max_streak <= 0:
+        return resolved
+
+    queues: dict[str, deque[ResolvedCut]] = defaultdict(deque)
+    phrase_order: list[str] = []
+    for rc in resolved:
+        if rc.match.phrase not in queues:
+            phrase_order.append(rc.match.phrase)
+        queues[rc.match.phrase].append(rc)
+
+    if len(phrase_order) <= 1:
+        return resolved  # одна фраза — переставлять нечего
+
+    result: list[ResolvedCut] = []
+    last_phrase: str | None = None
+    streak = 0
+    while any(queues.values()):
+        candidates = [p for p in phrase_order if queues[p]]
+        if last_phrase is not None and min_streak > 0 and streak < min_streak and queues[last_phrase]:
+            # Минимум ещё не набран — обязаны продолжать текущую фразу, если у неё есть чем.
+            chosen = last_phrase
+        else:
+            if last_phrase is not None and max_streak > 0 and streak >= max_streak:
+                not_last = [p for p in candidates if p != last_phrase]
+                if not_last:
+                    candidates = not_last
+            chosen = max(candidates, key=lambda p: len(queues[p]))
+        result.append(queues[chosen].popleft())
+        streak = streak + 1 if chosen == last_phrase else 1
+        last_phrase = chosen
+    return result
 
 
 def cut_clip(video_path: Path, start_sec: float, end_sec: float, padding_sec: float, out_path: Path) -> bool:
@@ -355,6 +433,8 @@ def main() -> int:
         before = len(resolved)
         resolved = select_best_of(resolved, _args.best_of_sec, padding_sec)
         logger.info(f"Лучшее из {before}: выбрано {len(resolved)} совпадений (цель ~{_args.best_of_sec:.0f} сек)")
+
+    resolved = arrange_phrase_streaks(resolved, _args.min_phrase_streak, _args.max_phrase_streak)
 
     # Фразы трактуются как ИЛИ: один общий результат на все совпадения сразу, а не по папке на фразу.
     label = " или ".join(_args.phrases)
