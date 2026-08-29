@@ -19,6 +19,11 @@ except ImportError:
     _FORMATTER_CLASS = argparse.HelpFormatter
 
 
+def _d(default: object, text: str) -> str:
+    """Приписывает значение по умолчанию в квадратных скобках в начало текста help."""
+    return f"[default: {default}] {text}"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from all_good_config import (
         GIGAAM_AVAILABLE_REVISIONS,
@@ -37,17 +42,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Папки или видеофайлы для сканирования (например, путь на \\\\luigi\\S-Downloads)",
     )
     parser.add_argument("--revision", default=SCAN_TRANSCRIBE_REVISION, choices=GIGAAM_AVAILABLE_REVISIONS,
-                        help="Ревизия модели GigaAM-v3")
-    parser.add_argument("--device", default=SCAN_TRANSCRIBE_DEVICE, choices=["auto", "cpu", "cuda"])
+                        help=_d(SCAN_TRANSCRIBE_REVISION, "Ревизия модели GigaAM-v3"))
+    parser.add_argument("--device", default=SCAN_TRANSCRIBE_DEVICE, choices=["auto", "cpu", "cuda"],
+                        help=_d(SCAN_TRANSCRIBE_DEVICE, "Устройство для вычислений"))
     parser.add_argument("--max-segment-sec", type=float, default=SCAN_TRANSCRIBE_MAX_SEGMENT_SEC,
-                        help="Макс. длительность сегмента VAD (сек) — меньше значение -> точнее таймстампы")
+                        help=_d(SCAN_TRANSCRIBE_MAX_SEGMENT_SEC,
+                                "Макс. длительность сегмента VAD (сек) — меньше значение -> точнее таймстампы"))
     parser.add_argument("--min-segment-sec", type=float, default=SCAN_TRANSCRIBE_MIN_SEGMENT_SEC,
-                        help="Мин. длительность сегмента VAD (сек)")
-    parser.add_argument("--force", action="store_true", help="Переобработать файлы с уже готовым результатом")
+                        help=_d(SCAN_TRANSCRIBE_MIN_SEGMENT_SEC, "Мин. длительность сегмента VAD (сек)"))
+    parser.add_argument("--force", action="store_true",
+                        help=_d(False, "Переобработать файлы с уже готовым результатом"))
     parser.add_argument("--no-recursive", dest="recursive", action="store_false",
-                        help="Не заходить в подпапки (по умолчанию — заходит)")
-    parser.add_argument("--debug", action="store_true", help="DEBUG-уровень логирования")
-    parser.add_argument("--env", default=None, help="Путь к .env файлу (по умолчанию — .env рядом со скриптом)")
+                        help=_d(True, "Не заходить в подпапки (по умолчанию — заходит рекурсивно)"))
+    parser.add_argument("--debug", action="store_true", help=_d(False, "DEBUG-уровень логирования"))
+    parser.add_argument("--env", default=None,
+                        help=_d(None, "Путь к .env файлу (по умолчанию — .env рядом со скриптом)"))
     return parser
 
 

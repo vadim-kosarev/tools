@@ -18,6 +18,11 @@ except ImportError:
     _FORMATTER_CLASS = argparse.HelpFormatter
 
 
+def _d(default: object, text: str) -> str:
+    """Приписывает значение по умолчанию в квадратных скобках в начало текста help."""
+    return f"[default: {default}] {text}"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     from all_good_config import CUT_PHRASES_OUTPUT_DIR, CUT_PHRASES_PADDING_MS
 
@@ -31,26 +36,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--folders", nargs="+", default=None,
-        help="Папки с *.segments.txt и видео из прохода 1 (обязательно, если заданы фразы)",
+        help=_d(None, "Папки с *.segments.txt и видео из прохода 1 (обязательно, если заданы фразы)"),
     )
-    parser.add_argument("--output-dir", default=CUT_PHRASES_OUTPUT_DIR, help="Куда складывать нарезку")
+    parser.add_argument("--output-dir", default=CUT_PHRASES_OUTPUT_DIR,
+                        help=_d(CUT_PHRASES_OUTPUT_DIR, "Куда складывать нарезку"))
     parser.add_argument("--padding-ms", type=int, default=CUT_PHRASES_PADDING_MS,
-                        help="Запас по времени до/после сегмента (мс)")
+                        help=_d(CUT_PHRASES_PADDING_MS, "Запас по времени до/после сегмента (мс)"))
     parser.add_argument(
         "--edge-only", action="store_true",
-        help="Резать только совпадения в начале или в конце сегмента речи, пропускать середину "
-             "(в середине вырезался бы весь сегмент целиком, а это лишний посторонний текст)",
+        help=_d(False, "Резать только совпадения в начале или в конце сегмента речи, пропускать "
+                "середину (в середине вырезался бы весь сегмент целиком, а это лишний посторонний текст)"),
     )
     parser.add_argument(
-        "--duration-ms", type=int, default=None,
-        help="Длина самой фразы в миллисекундах — резать окно этой длины вместо всего сегмента "
-             "речи, начиная с оценённой по позиции фразы в тексте точки (точнее, чем границы "
-             "всего сегмента, особенно вместе с --edge-only)",
+        "--isolate-silence", action="store_true",
+        help=_d(False, "Для совпадений на краю сегмента (см. --edge-only) ищет паузу с внутренней "
+                "стороны фразы — там, где сегмент продолжается другим текстом — и режет по ней, вместо "
+                "всего сегмента. Ищет только внутри уже известных границ сегмента, наружу не выходит. "
+                "Если фразы в середине сегмента (без --edge-only) или паузы внутри нет — не сужает"),
     )
     parser.add_argument("--no-recursive", dest="recursive", action="store_false",
-                        help="Не заходить в подпапки (по умолчанию — заходит)")
-    parser.add_argument("--debug", action="store_true", help="DEBUG-уровень логирования")
-    parser.add_argument("--env", default=None, help="Путь к .env файлу (по умолчанию — .env рядом со скриптом)")
+                        help=_d(True, "Не заходить в подпапки (по умолчанию — заходит рекурсивно)"))
+    parser.add_argument("--debug", action="store_true", help=_d(False, "DEBUG-уровень логирования"))
+    parser.add_argument("--env", default=None,
+                        help=_d(None, "Путь к .env файлу (по умолчанию — .env рядом со скриптом)"))
     return parser
 
 
@@ -82,7 +90,7 @@ from all_good_config import (
 from all_good_dto import PhraseMatch
 from all_good_utils import (
     collect_segments_files,
-    estimate_phrase_start_fraction,
+    detect_speech_spans,
     find_source_video,
     is_edge_match,
     normalize_for_match,
@@ -130,14 +138,46 @@ def find_matches(segments_files: list[Path], phrases: list[str], edge_only: bool
     return matches
 
 
-def estimate_cut_start(match: PhraseMatch, duration_ms: int | None) -> float:
-    """Начальная (до подрезки тишины) оценка старта окна вырезки. Без --duration-ms — начало
-    всего сегмента. С --duration-ms — точка, оценённая по позиции фразы в тексте сегмента."""
-    if duration_ms is None:
-        return match.start_sec
-    fraction_start = estimate_phrase_start_fraction(match.text, match.phrase)
-    seg_duration = match.end_sec - match.start_sec
-    return match.start_sec + fraction_start * seg_duration
+def isolate_edge_phrase(match: PhraseMatch) -> tuple[float, float] | None:
+    """Для совпадения на краю сегмента ищет реальную паузу с внутренней стороны фразы — строго
+    внутри уже известных границ сегмента (start_sec/end_sec), наружу не выходит, поэтому не может
+    зацепить что-то за пределами уже проверенного сегмента. Возвращает None, если фраза не на
+    краю сегмента, или паузы внутри нет (речь идёт без пауз до следующего предложения)."""
+    norm_text = normalize_for_match(match.text)
+    norm_phrase = normalize_for_match(match.phrase)
+    at_start = norm_text.startswith(norm_phrase)
+    at_end = norm_text.endswith(norm_phrase)
+
+    if at_start and at_end:
+        # Сегмент — это и есть вся фраза целиком, сужать по паузам внутри нечего.
+        cut_start = trim_leading_silence(
+            match.video_path, match.start_sec, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+        return cut_start, match.end_sec
+
+    if at_start:
+        cut_start = trim_leading_silence(
+            match.video_path, match.start_sec, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+        spans = detect_speech_spans(
+            match.video_path, cut_start, match.end_sec - cut_start, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+        if not spans:
+            return None
+        span_end = spans[0][1]
+        if span_end >= match.end_sec - 0.05:
+            return None  # паузы внутри сегмента нет — вся оставшаяся часть речи идёт без разрыва
+        return cut_start, span_end
+
+    if at_end:
+        spans = detect_speech_spans(
+            match.video_path, match.start_sec, match.end_sec - match.start_sec,
+            SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+        if not spans:
+            return None
+        span_start = spans[-1][0]
+        if span_start <= match.start_sec + 0.05:
+            return None
+        return span_start, match.end_sec
+
+    return None  # фраза в середине сегмента — искать паузу внутри неё самой не имеет смысла
 
 
 def cut_clip(video_path: Path, start_sec: float, end_sec: float, padding_sec: float, out_path: Path) -> bool:
@@ -186,7 +226,7 @@ def concat_clips(clip_paths: list[Path], out_path: Path) -> bool:
 
 def process_phrase(
         label: str, matches: list[PhraseMatch], output_dir: Path,
-        padding_sec: float, duration_ms: int | None) -> None:
+        padding_sec: float, isolate_silence: bool) -> None:
     """Вырезает все клипы (совпадения по ИЛИ одной или нескольких фраз) и склеивает их в один файл."""
     phrase_dir = output_dir / safe_filename(label)
     clips_dir = phrase_dir / "clips"
@@ -195,15 +235,18 @@ def process_phrase(
     logger.info(f'"{label}": найдено {len(matches)} совпадений')
     clip_paths = []
     for i, match in enumerate(matches, 1):
-        estimated_start = estimate_cut_start(match, duration_ms)
-        # Подрезка тишины — до применения --duration-ms, чтобы длина окна отсчитывалась уже от
-        # реального начала речи, а не от места, которое VAD по ошибке принял за старт.
-        cut_start = trim_leading_silence(
-            match.video_path, estimated_start, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
-        if cut_start > estimated_start:
-            logger.debug(f"  Подрезана тишина в начале: {cut_start - estimated_start:.2f}с")
-
-        cut_end = cut_start + duration_ms / 1000 if duration_ms is not None else match.end_sec
+        span = isolate_edge_phrase(match) if isolate_silence else None
+        if span is not None:
+            cut_start, cut_end = span
+            logger.debug(f"  Изолировано тишиной: [{seconds_to_timestamp(cut_start)} - {seconds_to_timestamp(cut_end)}]")
+        else:
+            # Подрезка ведущей тишины: VAD-сегмент иногда захватывает соседний беззвучный спан,
+            # для которого ASR не выдал текста, и реальная речь начинается чуть позже.
+            cut_start = trim_leading_silence(
+                match.video_path, match.start_sec, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+            if cut_start > match.start_sec:
+                logger.debug(f"  Подрезана тишина в начале: {cut_start - match.start_sec:.2f}с")
+            cut_end = match.end_sec
 
         clip_name = f"{match.video_path.stem}_{seconds_to_timestamp(cut_start).replace(':', '-')}.mp4"
         clip_path = clips_dir / clip_name
@@ -237,7 +280,7 @@ def main() -> int:
 
     # Фразы трактуются как ИЛИ: один общий результат на все совпадения сразу, а не по папке на фразу.
     label = " или ".join(_args.phrases)
-    process_phrase(label, matches, output_dir, _args.padding_ms / 1000, _args.duration_ms)
+    process_phrase(label, matches, output_dir, _args.padding_ms / 1000, _args.isolate_silence)
 
     return 0
 

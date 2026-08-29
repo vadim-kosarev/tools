@@ -283,3 +283,56 @@ def trim_leading_silence(
             tmp_dir.rmdir()
         except OSError:
             pass
+
+
+_SILENCE_START_ALL_RE = re.compile(r"silence_start:\s*([\d.]+)")
+_SILENCE_END_ALL_RE = re.compile(r"silence_end:\s*([\d.]+)")
+
+
+def detect_speech_spans(
+        video_path: Path, probe_start_sec: float, probe_duration_sec: float,
+        noise_db: float, min_silence_sec: float) -> list[tuple[float, float]]:
+    """Находит границы речевых кусков (обособленных тишиной) внутри окна [probe_start_sec,
+    probe_start_sec + probe_duration_sec). Возвращает список (start_sec, end_sec) в абсолютном
+    времени видео — это разбиение окна на речь, полученное обращением тишины из silencedetect."""
+    if probe_duration_sec <= 0:
+        return []
+    tmp_dir = Path(tempfile.mkdtemp(prefix="all_good_probe_"))
+    probe_path = tmp_dir / "probe.wav"
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{probe_start_sec:.3f}", "-i", str(video_path),
+            "-t", f"{probe_duration_sec:.3f}", "-vn", "-ac", "1", "-ar", "16000",
+            "-acodec", "pcm_s16le", str(probe_path),
+        ]
+        subprocess.run(cmd, capture_output=True)
+        if not probe_path.exists() or probe_path.stat().st_size == 0:
+            return []
+
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(probe_path), "-af",
+             f"silencedetect=noise={noise_db}dB:d={min_silence_sec}", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        starts = [float(x) for x in _SILENCE_START_ALL_RE.findall(result.stderr)]
+        ends = [float(x) for x in _SILENCE_END_ALL_RE.findall(result.stderr)]
+        silences = list(zip(starts, ends))
+        if len(starts) > len(ends):
+            silences.append((starts[-1], probe_duration_sec))
+
+        spans = []
+        pos = 0.0
+        for silence_start, silence_end in silences:
+            if silence_start > pos:
+                spans.append((pos, silence_start))
+            pos = max(pos, silence_end)
+        if pos < probe_duration_sec:
+            spans.append((pos, probe_duration_sec))
+
+        return [(probe_start_sec + a, probe_start_sec + b) for a, b in spans]
+    finally:
+        cleanup_temp_file(probe_path)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
