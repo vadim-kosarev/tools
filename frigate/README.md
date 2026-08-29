@@ -45,6 +45,16 @@ Frigate создаёт `backup.db` при обновлениях, но это н
 
 Внешний бэкап медиа не настроен.
 
+## Video Search
+
+Штатный семантический поиск Frigate (`/api/events/search`) занимает 40-65 секунд на запрос —
+причина в том, как jina-clip-v2 экспортирован в Frigate (полный vision-forward на пустую картинку
+даже для текстового запроса). Отдельный sidecar `video-search/` держит копию эмбеддингов в
+Postgres+pgvector и считает текстовый запрос напрямую через text-only путь модели. Подробности,
+архитектура и запуск — [`video-search/README.md`](video-search/README.md).
+
+Веб-интерфейс: `http://brightsky:8768` (локально) / `https://vkosarev.name:8769` (через frpc)
+
 ## Детектор
 
 Используется дефолтный CPU-детектор (TFLite SSD MobileNet). GPU (RTX 3060 Ti) занята под

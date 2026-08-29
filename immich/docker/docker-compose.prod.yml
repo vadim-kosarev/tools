@@ -189,18 +189,6 @@ services:
       - ../face-indexer/.env.json:/app/.env.json:ro
       - ../face-indexer/logs:/app/logs
 
-  # ------------------------------------------------------------------------
-  frpc:
-    image: snowdreamtech/frpc
-    container_name: immich_frpc
-    restart: always
-    depends_on:
-      - immich-server
-    volumes:
-      - ./frpc.ini:/etc/frp/frpc.ini
-    entrypoint: /usr/bin/frpc
-    command: ["-c", "/etc/frp/frpc.ini"]
-
 
 #  redis-commander:
 #    image: rediscommander/redis-commander
