@@ -54,6 +54,13 @@ def _build_parser() -> argparse.ArgumentParser:
                 "всего сегмента. Ищет только внутри уже известных границ сегмента, наружу не выходит. "
                 "Если фразы в середине сегмента (без --edge-only) или паузы внутри нет — не сужает"),
     )
+    parser.add_argument(
+        "--best-of-sec", type=float, default=None,
+        help=_d(None, "Не вся нарезка, а только лучшие совпадения на ~N секунд суммарно (не строго "
+                "— последний клип может слегка превысить порог). 'Лучшесть': сначала совпадения, "
+                "реально изолированные тишиной (--isolate-silence), затем — чем короче итоговый "
+                "клип, тем выше. Включает --isolate-silence автоматически"),
+    )
     parser.add_argument("--no-recursive", dest="recursive", action="store_false",
                         help=_d(True, "Не заходить в подпапки (по умолчанию — заходит рекурсивно)"))
     parser.add_argument("--debug", action="store_true", help=_d(False, "DEBUG-уровень логирования"))
@@ -76,6 +83,8 @@ if __name__ == "__main__":
 # ============================================================================
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import NamedTuple
 
 if _args.env:
     from dotenv import load_dotenv
@@ -106,6 +115,9 @@ logger = setup_logging(Path(__file__).stem, "DEBUG" if _args.debug else "INFO")
 
 # Единый fps для всех клипов (см. cut_clip) — исходники разных сезонов по-разному округляют 23.976fps.
 CLIP_TARGET_FPS = "24000/1001"
+
+# Проба тишины на совпадение — это 1-2 вызова ffmpeg (сеть/диск), не CPU — параллелим потоками.
+ISOLATE_WORKERS = 6
 
 
 def find_matches(segments_files: list[Path], phrases: list[str], edge_only: bool) -> list[PhraseMatch]:
@@ -180,6 +192,73 @@ def isolate_edge_phrase(match: PhraseMatch) -> tuple[float, float] | None:
     return None  # фраза в середине сегмента — искать паузу внутри неё самой не имеет смысла
 
 
+class ResolvedCut(NamedTuple):
+    """Одно совпадение с уже вычисленным окном вырезки."""
+    match: PhraseMatch
+    cut_start: float
+    cut_end: float
+    isolated: bool
+
+
+def resolve_cut(match: PhraseMatch, isolate_silence: bool) -> ResolvedCut:
+    """Вычисляет окно вырезки для одного совпадения: изоляция тишиной, если включена и удалась,
+    иначе весь сегмент с подрезкой ведущей тишины."""
+    span = isolate_edge_phrase(match) if isolate_silence else None
+    if span is not None:
+        return ResolvedCut(match, span[0], span[1], True)
+
+    # Подрезка ведущей тишины: VAD-сегмент иногда захватывает соседний беззвучный спан, для
+    # которого ASR не выдал текста, и реальная речь начинается чуть позже.
+    cut_start = trim_leading_silence(
+        match.video_path, match.start_sec, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
+    return ResolvedCut(match, cut_start, match.end_sec, False)
+
+
+def resolve_all(matches: list[PhraseMatch], isolate_silence: bool) -> list[ResolvedCut]:
+    """Вычисляет окно вырезки для каждого совпадения. С isolate_silence=True это 1-2 вызова ffmpeg
+    на совпадение (сеть/диск, не CPU) — считаем параллельно и логируем прогресс, а не молчим."""
+    if not isolate_silence or len(matches) <= 1:
+        return [resolve_cut(match, isolate_silence) for match in matches]
+
+    logger.info(f"Анализ пауз вокруг фразы (--isolate-silence): {len(matches)} совпадений...")
+    order = {id(match): idx for idx, match in enumerate(matches)}
+    resolved = []
+    with ThreadPoolExecutor(max_workers=ISOLATE_WORKERS) as executor:
+        futures = {executor.submit(resolve_cut, match, isolate_silence): match for match in matches}
+        for i, future in enumerate(as_completed(futures), 1):
+            rc = future.result()
+            resolved.append(rc)
+            logger.info(
+                f"  [{i}/{len(matches)}] {rc.match.video_path.name} [{seconds_to_timestamp(rc.match.start_sec)}] "
+                f"{'изолировано' if rc.isolated else 'без изоляции'}"
+            )
+    # Потоки завершаются в произвольном порядке — возвращаем исходный (хронологический) порядок.
+    resolved.sort(key=lambda rc: order[id(rc.match)])
+    return resolved
+
+
+def select_best_of(resolved: list[ResolvedCut], target_sec: float, padding_sec: float) -> list[ResolvedCut]:
+    """Жадно берёт совпадения с лучшей оценкой (изолированные, затем короче — лучше), пока не
+    наберётся ~target_sec суммарной длительности (включает клип, который пересекает порог, —
+    поэтому 'около', не строго). Итог — в хронологическом порядке для финальной сборки."""
+    def clip_duration(rc: ResolvedCut) -> float:
+        return (rc.cut_end - rc.cut_start) + 2 * padding_sec
+
+    def score(rc: ResolvedCut) -> float:
+        return (100.0 if rc.isolated else 0.0) - clip_duration(rc)
+
+    ranked = sorted(resolved, key=score, reverse=True)
+    selected: list[ResolvedCut] = []
+    total = 0.0
+    for rc in ranked:
+        if total >= target_sec:
+            break
+        selected.append(rc)
+        total += clip_duration(rc)
+    selected.sort(key=lambda rc: (str(rc.match.video_path), rc.match.start_sec))
+    return selected
+
+
 def cut_clip(video_path: Path, start_sec: float, end_sec: float, padding_sec: float, out_path: Path) -> bool:
     """Вырезает и перекодирует один клип из исходного видео."""
     start = max(0.0, start_sec - padding_sec)
@@ -224,34 +303,23 @@ def concat_clips(clip_paths: list[Path], out_path: Path) -> bool:
     return True
 
 
-def process_phrase(
-        label: str, matches: list[PhraseMatch], output_dir: Path,
-        padding_sec: float, isolate_silence: bool) -> None:
-    """Вырезает все клипы (совпадения по ИЛИ одной или нескольких фраз) и склеивает их в один файл."""
+def process_phrase(label: str, resolved: list[ResolvedCut], output_dir: Path, padding_sec: float) -> None:
+    """Вырезает клипы по уже вычисленным окнам (см. resolve_all) и склеивает их в один файл."""
     phrase_dir = output_dir / safe_filename(label)
     clips_dir = phrase_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f'"{label}": найдено {len(matches)} совпадений')
+    logger.info(f'"{label}": {len(resolved)} совпадений в нарезке')
     clip_paths = []
-    for i, match in enumerate(matches, 1):
-        span = isolate_edge_phrase(match) if isolate_silence else None
-        if span is not None:
-            cut_start, cut_end = span
-            logger.debug(f"  Изолировано тишиной: [{seconds_to_timestamp(cut_start)} - {seconds_to_timestamp(cut_end)}]")
-        else:
-            # Подрезка ведущей тишины: VAD-сегмент иногда захватывает соседний беззвучный спан,
-            # для которого ASR не выдал текста, и реальная речь начинается чуть позже.
-            cut_start = trim_leading_silence(
-                match.video_path, match.start_sec, SILENCE_TRIM_PROBE_SEC, SILENCE_TRIM_NOISE_DB, SILENCE_TRIM_MIN_SEC)
-            if cut_start > match.start_sec:
-                logger.debug(f"  Подрезана тишина в начале: {cut_start - match.start_sec:.2f}с")
-            cut_end = match.end_sec
+    for i, rc in enumerate(resolved, 1):
+        match = rc.match
+        if rc.isolated:
+            logger.debug(f"  Изолировано тишиной: [{seconds_to_timestamp(rc.cut_start)} - {seconds_to_timestamp(rc.cut_end)}]")
 
-        clip_name = f"{match.video_path.stem}_{seconds_to_timestamp(cut_start).replace(':', '-')}.mp4"
+        clip_name = f"{match.video_path.stem}_{seconds_to_timestamp(rc.cut_start).replace(':', '-')}.mp4"
         clip_path = clips_dir / clip_name
-        logger.info(f"  [{i}/{len(matches)}] {match.video_path.name} [{seconds_to_timestamp(cut_start)}] ({match.phrase}) {match.text[:50]}")
-        if cut_clip(match.video_path, cut_start, cut_end, padding_sec, clip_path):
+        logger.info(f"  [{i}/{len(resolved)}] {match.video_path.name} [{seconds_to_timestamp(rc.cut_start)}] ({match.phrase}) {match.text[:50]}")
+        if cut_clip(match.video_path, rc.cut_start, rc.cut_end, padding_sec, clip_path):
             clip_paths.append(clip_path)
 
     if not clip_paths:
@@ -277,10 +345,20 @@ def main() -> int:
 
     output_dir = Path(_args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    padding_sec = _args.padding_ms / 1000
+
+    # --best-of-sec без изоляции бессмысленен (нечем ранжировать) — включаем её автоматически.
+    isolate_silence = _args.isolate_silence or _args.best_of_sec is not None
+    resolved = resolve_all(matches, isolate_silence)
+
+    if _args.best_of_sec is not None:
+        before = len(resolved)
+        resolved = select_best_of(resolved, _args.best_of_sec, padding_sec)
+        logger.info(f"Лучшее из {before}: выбрано {len(resolved)} совпадений (цель ~{_args.best_of_sec:.0f} сек)")
 
     # Фразы трактуются как ИЛИ: один общий результат на все совпадения сразу, а не по папке на фразу.
     label = " или ".join(_args.phrases)
-    process_phrase(label, matches, output_dir, _args.padding_ms / 1000, _args.isolate_silence)
+    process_phrase(label, resolved, output_dir, padding_sec)
 
     return 0
 
