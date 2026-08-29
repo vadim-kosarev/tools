@@ -151,6 +151,10 @@ services:
       IMMICH_DB_PASSWORD: ${DB_PASSWORD}
       IMMICH_URL: ${FACE_FINDER_IMMICH_URL:-http://immich-server:2283}
       IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+    # brightsky в DNS отдаёт ещё и адреса своих docker-мостов, из контейнера имя
+    # резолвится через раз — фиксируем адрес явно (менять здесь при смене IP)
+    extra_hosts:
+      - "brightsky:192.168.1.43"
     ports:
       - "8767:8767"
 
@@ -173,6 +177,10 @@ services:
       IMMICH_ML_URL: ${FACE_SEARCH_ML_URL:-http://immich-machine-learning:3003}
       IMMICH_API_KEY: ${IMMICH_API_KEY:-}
       FACE_SEARCH_API_KEYS: ${FACE_SEARCH_API_KEYS:-}
+    # brightsky в DNS отдаёт ещё и адреса своих docker-мостов, из контейнера имя
+    # резолвится через раз — фиксируем адрес явно (менять здесь при смене IP)
+    extra_hosts:
+      - "brightsky:192.168.1.43"
     ports:
       - "8765:8765"
 
@@ -185,6 +193,10 @@ services:
       IMMICH_URL: ${FACE_INDEXER_IMMICH_URL:-http://immich-server:2283}
       IMMICH_API_KEY: ${IMMICH_API_KEY:-}
       LOG_LEVEL: ${FACE_INDEXER_LOG_LEVEL:-INFO}
+    # brightsky в DNS отдаёт ещё и адреса своих docker-мостов, из контейнера имя
+    # резолвится через раз — фиксируем адрес явно (менять здесь при смене IP)
+    extra_hosts:
+      - "brightsky:192.168.1.43"
     volumes:
       - ../face-indexer/.env.json:/app/.env.json:ro
       - ../face-indexer/logs:/app/logs

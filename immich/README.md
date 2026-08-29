@@ -26,13 +26,20 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## Failover (если упал brightsky)
 
+starlight держится в режиме спящего резерва: там запущен только standby-Postgres, который
+стримит WAL с brightsky.
+
 Если `https://vkosarev.name:7601` отдаёт `502` из-за падения brightsky — на **starlight**
 запустить:
 ```powershell
 cd C:\dev\github.com\vadim-kosarev\tools\immich\docker
 .\failover-to-starlight.ps1
 ```
-Дальше — читать инструкцию и чек-лист тут: [`immich/.ai/20260708.003_ha_failover_plan.md`](.ai/20260708.003_ha_failover_plan.md).
+Промоушен необратим: после него вернуть warm standby можно только пересидингом с нуля.
+
+Полный сценарий эксплуатации (спящий режим, проверки, failover, возврат на brightsky,
+пересидинг, типовые грабли) — [`README.failover.md`](README.failover.md).
+Проектное обоснование и история проверок — [`.ai/20260708.003_ha_failover_plan.md`](.ai/20260708.003_ha_failover_plan.md).
 
 ## Backup
 
