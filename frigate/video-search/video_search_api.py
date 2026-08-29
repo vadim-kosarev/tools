@@ -43,6 +43,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any, Generator, Optional
 
+import httpx
 import numpy as np
 import psycopg2
 import psycopg2.extras
@@ -50,7 +51,7 @@ import sqlite_vec
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 _SCRIPT_DIR = Path(__file__).parent
 _env_file = _args.env or str(_SCRIPT_DIR / ".env")
@@ -74,6 +75,7 @@ POSTGRES_USER = os.getenv("POSTGRES_USER", "rgzz")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "rgzz")
 
 FRIGATE_DB_PATH = os.getenv("FRIGATE_DB_PATH", "/frigate-config/frigate.db")
+FRIGATE_INTERNAL_URL = os.getenv("FRIGATE_INTERNAL_URL", "http://frigate:5000")
 SYNC_INTERVAL_SEC = int(os.getenv("SYNC_INTERVAL_SEC", "60"))
 SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "5000"))
 
@@ -332,6 +334,14 @@ def _embed_query_cached(text: str) -> tuple[float, ...]:
 # API
 # ---------------------------------------------------------------------------
 app = FastAPI()
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
 
 
 @app.on_event("startup")
@@ -344,6 +354,45 @@ def _on_startup() -> None:
 @app.get("/api/stats")
 def stats() -> JSONResponse:
     return JSONResponse(_get_stats())
+
+
+@app.get("/api/proxy/thumbnail/{event_id}")
+async def proxy_thumbnail(event_id: str) -> Response:
+    """Proxy Frigate's event thumbnail via the internal docker network.
+
+    Frigate is only reachable externally through nginx basic-auth (vkosarev.name:5001) - an
+    <img> tag can't supply those credentials, so the browser always loads thumbnails through us
+    instead, and we reach Frigate directly (same docker network, no auth needed there).
+    """
+    client = _get_http_client()
+    try:
+        resp = await client.get(f"{FRIGATE_INTERNAL_URL}/api/events/{event_id}/thumbnail.jpg")
+    except httpx.HTTPError:
+        return Response(status_code=502)
+    if resp.status_code != 200:
+        return Response(status_code=resp.status_code)
+    return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
+
+
+@app.get("/api/proxy/clip/{event_id}")
+async def proxy_clip(event_id: str) -> StreamingResponse:
+    """Stream Frigate's event clip via the internal docker network (see proxy_thumbnail)."""
+    client = _get_http_client()
+    req = client.build_request("GET", f"{FRIGATE_INTERNAL_URL}/api/events/{event_id}/clip.mp4")
+    resp = await client.send(req, stream=True)
+
+    async def _body():
+        try:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+        finally:
+            await resp.aclose()
+
+    return StreamingResponse(
+        _body(),
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type", "video/mp4"),
+    )
 
 
 CANDIDATE_POOL_SIZE = int(os.getenv("CANDIDATE_POOL_SIZE", "500"))
@@ -503,19 +552,14 @@ let lastEmbedMs = 0;
 q.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 sortSel.addEventListener('change', () => { if (q.value.trim()) doSearch(); });
 
-function frigateBase() {
-    return `${location.protocol}//${location.hostname}:5000`;
-}
-
 function fmtTime(ts) {
     return new Date(ts * 1000).toLocaleString('ru-RU');
 }
 
 function cardHtml(r) {
-    const base = frigateBase();
     return `
-        <a class="card" href="${base}/api/events/${r.id}/clip.mp4" target="_blank">
-            <img class="thumb" src="${base}/api/events/${r.id}/thumbnail.jpg" loading="lazy">
+        <a class="card" href="/api/proxy/clip/${r.id}" target="_blank">
+            <img class="thumb" src="/api/proxy/thumbnail/${r.id}" loading="lazy">
             <div class="info">
                 <div class="label">${r.label}</div>
                 <div class="camera">${r.camera}</div>
