@@ -73,6 +73,7 @@ POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_DB = os.getenv("POSTGRES_DB", "frigate")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "rgzz")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "rgzz")
+GRANT_SELECT_ROLE = os.getenv("GRANT_SELECT_ROLE", "frigate")
 
 FRIGATE_DB_PATH = os.getenv("FRIGATE_DB_PATH", "/frigate-config/frigate.db")
 FRIGATE_INTERNAL_URL = os.getenv("FRIGATE_INTERNAL_URL", "http://frigate:5000")
@@ -129,6 +130,25 @@ def _ensure_schema() -> None:
         """)
         conn.commit()
         logger.info("video_search schema ready")
+
+    if GRANT_SELECT_ROLE:
+        # Postgres is shared with the frigate/ANPR pipeline (public schema, role "frigate" -
+        # postgres-init/01-init.sql in the tools repo). This schema is created under our own
+        # connection user, so that role has no access to it by default - grant read access so
+        # ad-hoc queries against video_search.* work the same as against public.*. Best-effort:
+        # a failed grant (e.g. role doesn't exist in some other deployment) shouldn't block
+        # startup - just log and move on, in its own connection so it can't abort schema setup.
+        try:
+            with _pg_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(f"GRANT USAGE ON SCHEMA video_search TO {GRANT_SELECT_ROLE}")
+                cur.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA video_search TO {GRANT_SELECT_ROLE}")
+                cur.execute(
+                    f"ALTER DEFAULT PRIVILEGES IN SCHEMA video_search GRANT SELECT ON TABLES TO {GRANT_SELECT_ROLE}"
+                )
+                conn.commit()
+        except psycopg2.Error as e:
+            logger.warning("could not grant SELECT on video_search to %r: %s", GRANT_SELECT_ROLE, e)
 
 
 _vector_index_ready = False
