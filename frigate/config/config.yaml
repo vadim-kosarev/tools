@@ -99,7 +99,7 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:noname564@192.168.2.14:554/stream1
+        - path: rtsp://admin:noname564@192.168.56.14:554/stream1
           roles:
             - detect
             - record
@@ -142,7 +142,7 @@ cameras:
     ffmpeg:
       inputs:
         - path: 
-            rtsp://admin:noname564@192.168.2.80:554/cam/realmonitor?channel=1&subtype=0
+            rtsp://admin:noname564@192.168.56.80:554/cam/realmonitor?channel=1&subtype=0
           roles:
             - detect
             - record

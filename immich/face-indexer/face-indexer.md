@@ -28,7 +28,7 @@ Docker-образ (`Dockerfile`), запущенный как сервис `face
 - Расписание: раз в сутки, `30 3 * * *`.
 - Конфиг (`.env.json`) и логи (`logs/`) смонтированы volume'ами с хоста — редактируются без пересборки образа.
 - **Без `depends_on: immich-server`**: сервис ходит в Immich только по REST через `IMMICH_URL`/`IMMICH_API_KEY`, поэтому не обязан быть частью одного и того же compose-стека или хоста — может быть развёрнут где угодно, лишь бы был сетевой доступ до Immich.
-- Реально Immich крутится на отдельной машине `brightsky` (не на этом dev-хосте). Контейнер `face-indexer` поднят локально (dev-хост, Docker Desktop) и ходит на `brightsky` по сети через override `FACE_INDEXER_IMMICH_URL=http://192.168.1.43:2283` в `immich/docker/.env` (по аналогии с уже существующим `FACE_FINDER_IMMICH_URL`). На самом `brightsky` этот override не нужен — там сработает дефолт `http://immich-server:2283` (docker network).
+- Реально Immich крутится на отдельной машине `brightsky` (не на этом dev-хосте). Контейнер `face-indexer` поднят локально (dev-хост, Docker Desktop) и ходит на `brightsky` по сети через override `FACE_INDEXER_IMMICH_URL=http://brightsky:2283` в `immich/docker/.env` (по аналогии с уже существующим `FACE_FINDER_IMMICH_URL`). На самом `brightsky` этот override не нужен — там сработает дефолт `http://immich-server:2283` (docker network).
 
 ## Логика (черновик)
 
