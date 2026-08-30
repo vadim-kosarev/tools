@@ -2,7 +2,12 @@ services:
 
   # ----------------------------------------------------------------------------------------------------------------------------------------
   frigate:
-    image: ghcr.io/blakeblackshear/frigate:stable-tensorrt
+    # Пин на 0.16.4 (было stable-tensorrt = 0.17.2): с апгрейда на 0.17 (2026-07-11, commit
+    # 9fb03ec) semantic_search пишет один и тот же битый vision-эмбеддинг на каждое новое
+    # событие (проверено побайтово — 54к+ событий с identical вектором) - похоже на regression
+    # в 0.17.x. 0.16.4 - последний патч перед апгрейдом. reindex: true в config.yaml пересчитает
+    # все эмбеддинги заново под этой версией.
+    image: ghcr.io/blakeblackshear/frigate:0.16.4-tensorrt
     container_name: frigate
     hostname: frigate.rgzz
     restart: unless-stopped
