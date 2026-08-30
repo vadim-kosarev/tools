@@ -553,6 +553,19 @@ h1 { text-align: center; margin-bottom: 20px; color: #4ea8de; font-size: 24px; }
 .card .camera { color: #aaa; font-size: 12px; }
 .card .time { color: #888; font-size: 11px; margin-top: 2px; }
 .card .dist { color: #666; font-size: 11px; }
+
+@media (max-width: 640px) {
+    .container { padding: 14px 12px 40px; }
+    h1 { font-size: 20px; margin-bottom: 14px; }
+    .search-bar { flex-direction: column; gap: 8px; }
+    .search-bar input[type=text],
+    .search-bar select,
+    .search-bar button {
+        width: 100%; font-size: 16px; /* 16px не даёт iOS Safari зумить при фокусе */
+    }
+    .results { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+    .load-more { width: 100%; padding: 14px; }
+}
 </style>
 </head>
 <body>
