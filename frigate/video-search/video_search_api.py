@@ -455,6 +455,11 @@ def search(
     order_by = _SORT_EXPR[sort]
     with _pg_conn() as conn:
         cur = conn.cursor()
+        # pgvector's HNSW defaults to ef_search=40 - silently caps the inner ORDER BY/LIMIT
+        # below CANDIDATE_POOL_SIZE (e.g. only 40 of the intended 500 candidates), which made
+        # has_more permanently false ("Показать ещё" never appeared) since a page could never
+        # reach `limit` rows. Must be >= CANDIDATE_POOL_SIZE for the pool to actually fill.
+        cur.execute("SET hnsw.ef_search = %s", (max(CANDIDATE_POOL_SIZE, 40),))
         cur.execute(
             f"""
             WITH candidates AS (
