@@ -455,6 +455,11 @@ def search(
     order_by = _SORT_EXPR[sort]
     with _pg_conn() as conn:
         cur = conn.cursor()
+        # pgvector's HNSW defaults to ef_search=40 - silently caps the inner ORDER BY/LIMIT
+        # below CANDIDATE_POOL_SIZE (e.g. only 40 of the intended 500 candidates), which made
+        # has_more permanently false ("Показать ещё" never appeared) since a page could never
+        # reach `limit` rows. Must be >= CANDIDATE_POOL_SIZE for the pool to actually fill.
+        cur.execute("SET hnsw.ef_search = %s", (max(CANDIDATE_POOL_SIZE, 40),))
         cur.execute(
             f"""
             WITH candidates AS (
@@ -553,6 +558,19 @@ h1 { text-align: center; margin-bottom: 20px; color: #4ea8de; font-size: 24px; }
 .card .camera { color: #aaa; font-size: 12px; }
 .card .time { color: #888; font-size: 11px; margin-top: 2px; }
 .card .dist { color: #666; font-size: 11px; }
+
+@media (max-width: 640px) {
+    .container { padding: 14px 12px 40px; }
+    h1 { font-size: 20px; margin-bottom: 14px; }
+    .search-bar { flex-direction: column; gap: 8px; }
+    .search-bar input[type=text],
+    .search-bar select,
+    .search-bar button {
+        width: 100%; font-size: 16px; /* 16px не даёт iOS Safari зумить при фокусе */
+    }
+    .results { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+    .load-more { width: 100%; padding: 14px; }
+}
 </style>
 </head>
 <body>
