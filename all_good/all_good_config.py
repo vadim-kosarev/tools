@@ -78,6 +78,10 @@ VIDEO_EXTENSIONS = {
     '.webm', '.m4v', '.mpg', '.mpeg', '.3gp', '.ts',
 }
 
+AUDIO_EXTENSIONS = {
+    '.mp3', '.wav',
+}
+
 # Суффикс выходного файла с таймстампами: <имя_видео>.gigaam-<revision>.segments.txt
 OUTPUT_SUFFIX_TEMPLATE = ".gigaam-{revision}.segments.txt"
 

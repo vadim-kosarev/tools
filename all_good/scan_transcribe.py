@@ -89,7 +89,7 @@ from all_good_config import AUDIO_SAMPLE_RATE, GIGAAM_MODEL_NAME, HF_TOKEN, setu
 from all_good_dto import ProcessingStatus, ScanReport, SegmentTranscript
 from all_good_utils import (
     cleanup_temp_file,
-    collect_video_files,
+    collect_media_files,
     extract_audio_from_video,
     finalize_segments_file,
     format_segment_line,
@@ -180,13 +180,13 @@ def main() -> int:
     device = determine_device(_args.device)
     logger.info(f"Устройство: {device.upper()}, ревизия GigaAM: {_args.revision}")
 
-    video_files = collect_video_files(_args.folders, _args.recursive)
+    video_files = collect_media_files(_args.folders, _args.recursive)
     report = ScanReport(total_found=len(video_files))
     if not video_files:
-        logger.error("Видеофайлы не найдены")
+        logger.error("Медиафайлы не найдены")
         return 1
 
-    logger.info(f"Найдено видеофайлов: {len(video_files)}")
+    logger.info(f"Найдено медиафайлов: {len(video_files)}")
 
     files_to_process = []
     for video_path in video_files:

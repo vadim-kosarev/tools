@@ -20,6 +20,7 @@ from all_good_config import (
     LOG_MAX_BYTES,
     OUTPUT_SUFFIX_TEMPLATE,
     VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS
 )
 from all_good_dto import ProcessingStatus, SegmentTranscript
 
@@ -79,13 +80,16 @@ def is_video_file(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTENSIONS
 
 
-def collect_video_files(inputs: list[str], recursive: bool) -> list[Path]:
+def collect_media_files(inputs: list[str], recursive: bool) -> list[Path]:
     """Собирает список видеофайлов из переданных путей (файлы или папки)."""
     result: list[Path] = []
     for raw in inputs:
         path = Path(raw).expanduser().resolve()
         if path.is_dir():
             for ext in VIDEO_EXTENSIONS:
+                pattern = f"**/*{ext}" if recursive else f"*{ext}"
+                result.extend(path.glob(pattern))
+            for ext in AUDIO_EXTENSIONS:
                 pattern = f"**/*{ext}" if recursive else f"*{ext}"
                 result.extend(path.glob(pattern))
         elif path.is_file() and is_video_file(path):
