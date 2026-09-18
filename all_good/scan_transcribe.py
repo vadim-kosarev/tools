@@ -102,6 +102,19 @@ setup_ffmpeg_path()
 logger = setup_logging(Path(__file__).stem, "DEBUG" if _args.debug else "INFO")
 
 
+def allow_pyannote_checkpoint_globals() -> None:
+    """С PyTorch >= 2.6 torch.load по умолчанию weights_only=True и отвергает чекпоинт
+    pyannote/segmentation-3.0 (VAD внутри GigaAM). Разрешаем только классы, которые
+    реально лежат в этом чекпоинте, вместо отключения защиты целиком."""
+    from pyannote.audio.core.task import Problem, Resolution, Specifications
+    from torch.torch_version import TorchVersion
+
+    torch.serialization.add_safe_globals([TorchVersion, Specifications, Problem, Resolution])
+
+
+allow_pyannote_checkpoint_globals()
+
+
 def determine_device(device_arg: str) -> str:
     if device_arg == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
