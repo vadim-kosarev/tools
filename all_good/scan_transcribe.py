@@ -81,6 +81,11 @@ from datetime import datetime
 import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 
+# transformers сам подтягивает tensorflow, если тот установлен (а он тут не нужен и может быть
+# сломан, как "No module named 'absl'") — отключаем до импорта transformers.
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_TORCH", "1")
+
 import torch
 import torchaudio
 from transformers import AutoModel
