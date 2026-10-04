@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -139,6 +139,11 @@ def cleanup_temp_file(path: Path) -> None:
 
 def format_segment_line(seg: SegmentTranscript) -> str:
     return f"[{seconds_to_timestamp(seg.start_sec)} - {seconds_to_timestamp(seg.end_sec)}] {seg.text}"
+
+
+def format_absolute_line(base_time: datetime, start_sec: float, text: str) -> str:
+    """Строка реплики с абсолютным временем начала: [YYYY-MM-DD HH:MM:SS] текст."""
+    return f"[{(base_time + timedelta(seconds=start_sec)).strftime('%Y-%m-%d %H:%M:%S')}] {text}"
 
 
 def get_partial_output_path(video_path: Path, revision: str) -> Path:

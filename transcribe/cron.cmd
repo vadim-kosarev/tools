@@ -7,5 +7,5 @@ call ..\.venv\Scripts\activate.bat
 ::call python t_directory.py K:\vkshare\SmartRecorder --script t_gigaam_blocks.py 2>&1 
 
 cd ..
-call python all_good\scan_transcribe.py K:\vkshare\CallRec       2>&1
-call python all_good\scan_transcribe.py K:\vkshare\SmartRecorder 2>&1
+call python all_good\scan_transcribe.py K:\vkshare\CallRec --absolute-time 2>&1
+call python all_good\scan_transcribe.py K:\vkshare\SmartRecorder --absolute-time 2>&1

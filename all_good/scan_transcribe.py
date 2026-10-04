@@ -50,6 +50,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                 "Макс. длительность сегмента VAD (сек) — меньше значение -> точнее таймстампы"))
     parser.add_argument("--min-segment-sec", type=float, default=SCAN_TRANSCRIBE_MIN_SEGMENT_SEC,
                         help=_d(SCAN_TRANSCRIBE_MIN_SEGMENT_SEC, "Мин. длительность сегмента VAD (сек)"))
+    parser.add_argument("--absolute-time", action="store_true",
+                        help=_d(False, "Писать в результат вместо сегмента [начало - конец] абсолютный таймстамп "
+                                       "реплики [YYYY-MM-DD HH:MM:SS] = дата модификации файла + смещение внутри файла"))
     parser.add_argument("--force", action="store_true",
                         help=_d(False, "Переобработать файлы с уже готовым результатом"))
     parser.add_argument("--no-recursive", dest="recursive", action="store_false",
@@ -74,6 +77,7 @@ if __name__ == "__main__":
 # ============================================================================
 
 import importlib
+from datetime import datetime
 import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -92,6 +96,7 @@ from all_good_utils import (
     collect_media_files,
     extract_audio_from_video,
     finalize_segments_file,
+    format_absolute_line,
     format_segment_line,
     get_partial_output_path,
     get_processing_status,
@@ -129,7 +134,8 @@ def prepare_audio(video_path: Path, sample_rate: int) -> tuple[Path, Path]:
     return tmp_dir, audio_path
 
 
-def transcribe_audio_streaming(model: AutoModel, audio_path: Path, out_path: Path) -> int:
+def transcribe_audio_streaming(model: AutoModel, audio_path: Path, out_path: Path,
+                               base_time: datetime | None = None) -> int:
     """VAD-сегментация + распознавание сегмент за сегментом, с записью каждой
     строки в файл сразу после распознавания. Возвращает число сегментов."""
     gigaam_module = importlib.import_module(type(model.model).__module__)
@@ -157,7 +163,10 @@ def transcribe_audio_streaming(model: AutoModel, audio_path: Path, out_path: Pat
                 cleanup_temp_file(seg_path)
                 if not text:
                     continue
-                line = format_segment_line(SegmentTranscript(start_sec=start_sec, end_sec=end_sec, text=text))
+                if base_time is not None:
+                    line = format_absolute_line(base_time, start_sec, text)
+                else:
+                    line = format_segment_line(SegmentTranscript(start_sec=start_sec, end_sec=end_sec, text=text))
                 out_file.write(line + "\n")
                 out_file.flush()
                 count += 1
@@ -172,8 +181,9 @@ def transcribe_audio_streaming(model: AutoModel, audio_path: Path, out_path: Pat
 def process_video(model: AutoModel, video_path: Path, audio_path: Path, revision: str) -> bool:
     """Распознаёт уже извлечённый звук одного видеофайла. Возвращает True при успехе."""
     partial_path = get_partial_output_path(video_path, revision)
+    base_time = datetime.fromtimestamp(video_path.stat().st_mtime) if _args.absolute_time else None
     try:
-        count = transcribe_audio_streaming(model, audio_path, partial_path)
+        count = transcribe_audio_streaming(model, audio_path, partial_path, base_time)
     except Exception as e:
         logger.error(f"Ошибка распознавания {video_path.name}: {type(e).__name__} -> {e}", exc_info=_args.debug)
         cleanup_temp_file(partial_path)
