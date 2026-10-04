@@ -255,7 +255,8 @@ def main() -> int:
         if i + 1 < len(files_to_process):
             next_extraction = executor.submit(prepare_audio, files_to_process[i + 1], AUDIO_SAMPLE_RATE)
 
-        logger.info(f"Обрабатываем: {video_path}")
+        total = len(files_to_process)
+        logger.info(f"Обрабатываем [{i + 1}/{total}, завершено {i * 100 // total}%]: {video_path}")
         try:
             if process_video(model, video_path, audio_path, _args.revision):
                 report.processed += 1
