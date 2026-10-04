@@ -11,3 +11,6 @@ hydra-core
 python-dotenv
 pydantic
 rich-argparse
+
+# transformers при импорте заглядывает в tensorflow (если установлен); absl нужен ему, чтобы не падать
+absl-py
