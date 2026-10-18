@@ -50,6 +50,8 @@ cd C:\dev\github.com\vadim-kosarev\tools\immich\docker
 - Расписание настраивается в Admin UI: Administration -> Settings -> Backup Database -> `cronExpression`
 - По умолчанию: раз в сутки в 02:00
 - Дампы пишутся в контейнере в `/opt/backup`, на хосте маппится в `${UPLOAD_LOCATION}/photos/backups` (`K:\immich\upload\photos\backups`)
+- Хранится последних 2 дампа (Admin UI -> Backup -> Keep last amount); размер дампа после удаления `face_finder` около 1.4 ГБ
+- ML-контейнер: `MACHINE_LEARNING_MODEL_REVISION=v2` (обход OCR-бага #32512 в v3.3.x), см. `.ai/20261018.004_...md`
 
 ### Media files
 
@@ -62,6 +64,11 @@ cd C:\dev\github.com\vadim-kosarev\tools\immich\docker
 - Пропускает копирование если файл уже скопирован (сравнение по размеру)
 
 ## Face Finder
+
+> **Отключён с 2026-10-18:** сервис убран из `docker-compose.prod.yml`, схема `face_finder` удалена из БД immich
+> (она весила 79 ГБ и раздувала дампы с 1.35 ГБ до 92 ГБ). Исходники оставлены. Подробности и копия малых таблиц —
+> [`.ai/20261018.004_upgrade_v3.3.3_face_finder_removal_ml_ocr.md`](.ai/20261018.004_upgrade_v3.3.3_face_finder_removal_ml_ocr.md).
+> Блок ниже описывает прежнюю работу сервиса.
 
 Веб-приложение для управления лицами в базе Immich (rich client SPA + REST API).
 

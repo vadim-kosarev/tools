@@ -84,6 +84,9 @@ services:
     - EXECUTION_PROVIDERS=cuda
     - ENABLE_GPU=true
     - DEVICE=cuda
+    # Workaround for immich-app/immich#32512 (v3.3.x): with the default "main" revision every
+    # non-Chinese PP-OCRv5 recognition model fails ("Got: 48 Expected: 224"). Drop once fixed upstream.
+    - MACHINE_LEARNING_MODEL_REVISION=v2
 
   redis:
     container_name: immich_redis
@@ -139,22 +142,6 @@ services:
 #    environment:
 #      - GF_SECURITY_ADMIN_USER=admin
 #      - GF_SECURITY_ADMIN_PASSWORD=admin
-
-  # ------------------------------------------------------------------------
-  face-finder:
-    build: ../face-finder
-    container_name: immich_face_finder
-    restart: unless-stopped
-    environment:
-      IMMICH_DB_HOST: ${FACE_FINDER_DB_HOST:-database}
-      IMMICH_DB_PORT: ${FACE_FINDER_DB_PORT:-5432}
-      IMMICH_DB_NAME: ${DB_DATABASE_NAME}
-      IMMICH_DB_USER: ${DB_USERNAME}
-      IMMICH_DB_PASSWORD: ${DB_PASSWORD}
-      IMMICH_URL: ${FACE_FINDER_IMMICH_URL:-http://immich-server:2283}
-      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
-    ports:
-      - "8767:8767"
 
   # ------------------------------------------------------------------------
   face-search:
